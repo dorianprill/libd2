@@ -1,0 +1,26 @@
+[package]
+name = "libd2r"
+version = "0.1.0"
+description = """A Diablo II: Resurrected library for core and simple client functionality, 
+                 written in Rust for performance, safety and re-usability."""
+authors = ["Dorian Prill"]
+repository = "https://github.com/dorianprill/libd2r"
+readme = "README.md"
+keywords = ["diablo", "resurrected"]
+categories = ["games"]
+edition = "2021"
+license = "MIT"
+
+
+exclude = [
+    "*.png",
+    "*.jpg",
+    "examples/*",
+    ".github/*",
+    ".gitignore",
+    ".vscode/*",
+]
+
+
+[dependencies]
+pnet = "0.29.0"
