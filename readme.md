@@ -36,9 +36,13 @@ If you are interested in Diablo II and/or Rust, this might be fun!
 
 ## How to Build
 
-The library should build on any platform just fine with cargo:
-
+### Linux
 `cargo build --release`
+### Mac Os
+`cargo build --release` (not tested yet)
+### Windows
+You will need to install npcap and additionally download the WinPcap Developers Pack as per the [libpnet](https://github.com/libpnet/libpnet) build instructions for Windows. Then point your user environment variable `LIB` (create if nonexistent) to the folder where to find Packet.lib i.e. `WpdPack/Lib/x64/` from the WinPcap Developers Pack you just downloaded. Then `cargo build --release`
+This should get the project building but the executable crashes while querying the available network interfaces on my machine (maybe need to adapt code for windows).    
 
 At this early stage i haven't created any bindings, but Python/JS would be useful to many people I guess.
 
