@@ -46,11 +46,26 @@ This should get the project building but the executable crashes while querying t
 
 At this early stage i haven't created any bindings, but Python/JS would be useful to many people I guess.
 
+## Usage
+
+One simple use case that is supported now is launching a listening client/connection to sniff d2gs packets:
+
+```Rust
+use libd2r::Client;
+
+fn main() {
+    let mut client = Client::new();
+    client.start()
+}
+```
+
+Plase note that it does not fill any internal game data structures as of now (state update handling is still WIP). It will just filter, decode and print packets.
+
 ## Contributing
 
 This is quite the challenge so any help is appreciated!  
 There is quite a bit of awesome code out there, but scattered across various sources.  
-Maybe you want to help translating [d2r savegame utility from go](https://github.com/nokka/d2s)?  
+Maybe you want to help translating this [d2r savegame utility from go](https://github.com/Vitalick/go-d2editor)?  
 Or help with the map generation from game seed? It exists in several projects (d2bs, opendiablo, opend2, ...) and shouldn't have changed for D2R.
 
 ## Disclaimer
