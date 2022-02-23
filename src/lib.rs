@@ -3,6 +3,7 @@
 pub mod client;
 pub mod core;
 
+pub use self::client::client::Client;
 pub use self::core::coordinate::Coordinate;
 pub use self::core::game_state::GameState;
 pub use self::core::object::item::{Item, ItemBufferCoord, ItemBufferId};

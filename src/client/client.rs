@@ -22,7 +22,18 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(&self) -> Self {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    pub fn start(&mut self) {
+        self.connection.init();
+        self.connection.listen();
+    }
+}
+
+impl Default for Client {
+    fn default() -> Self {
         Client {
             game_state: GameState {
                 players: Vec::with_capacity(8),
@@ -33,10 +44,5 @@ impl Client {
             },
             connection: Connection::new(),
         }
-    }
-
-    pub fn start(&mut self) {
-        self.connection.init();
-        self.connection.listen();
     }
 }
