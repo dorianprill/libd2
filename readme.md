@@ -1,6 +1,6 @@
-# Diablo II Resurrected Library
+# A Diablo II (Legacy) Library
 
-A Diablo II Resurrected library for core and simple client functionality, written in Rust for performance, safety and re-usability.
+A Diablo II library for core and simple client functionality, written in Rust for performance, safety and re-usability.
 
 This effort is very much WIP, so it is not available on crates.io yet.  
 
@@ -37,11 +37,11 @@ If you are interested in Diablo II and/or Rust, this might be fun!
 ## How to Build
 
 Building on windows requires some extra steps, otherwise it should be smooth sailing.  
-At this early stage I haven't created any bindings, but Python/JS would be useful to many people I guess.
+At this early stage I haven't created any bindings, but Python/TypeScript would be useful to many people, I guess.
 
 ### Linux
 
-Tested with Diablo 2 (Vanilla) and WINE, not tested with D2R yet because I don't have a vulkan capable machine
+Tested with Diablo 2 (Legacy) and WINE
 `cargo build --release`
 
 ### Mac Os
@@ -74,7 +74,7 @@ Please note that currently it does not fill any internal game data structures (s
 
 This is quite the challenge so any help is appreciated!  
 There is quite a bit of awesome code out there, but scattered across various sources.  
-Maybe you want to help translating this [d2r savegame utility from go](https://github.com/Vitalick/go-d2editor)?  
+Maybe you want to help translating this [d2r savegame utility from go](https://github.com/Vitalick/go-d2editor) (for D2R save files)?  
 Or help with the map generation from game seed? It exists in several projects (d2bs, opendiablo, opend2, ...) and shouldn't have changed for D2R.
 
 ## Disclaimer
