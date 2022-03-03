@@ -26,7 +26,13 @@ use crate::core::network::d2gs::D2GSReader;
 // There are three different connections involved:
 // BNCS: the battle.net chat server
 // Realm: (also called MCP)
+//   Ports:
+//     6112 UDP for D2Vanilla
+//     6120 UDP for D2R (PC)
 // D2GS:  The diablo2 game server protocol
+//   Ports: 
+//     4000 TCP for D2Vanilla
+//     1119 TCP for D2R (PC)
 
 pub struct Connection {
     interface: NetworkInterface,
@@ -52,7 +58,6 @@ impl Connection {
         // interface has an internet connection is not possible with libpnet
         // maybe use 
         // https://microsoft.github.io/windows-docs-rs/doc/windows/Networking/Connectivity/struct.ConnectionProfile.html#method.GetNetworkConnectivityLevel
-        // instead and have a special #[cfg(target_os = "windows")] init() method
         let interfaces = datalink::interfaces();
         // linux/MacOs: should be easy to find an internet connected interface.
         // TODO how to ensure it is the default iprouted one?
@@ -145,9 +150,9 @@ impl Connection {
             //}
             match udp.get_destination() {
                 // game packet
-                4000 => self.d2gs_reader.read(udp.payload()),
+                1119 | 4000 => self.d2gs_reader.read(udp.payload()),
                 // bncs/realm packet -> not implemented yet
-                //6112 => println!("Received unhandled BNCS or Realm packet"),
+                //6112 | 6120 => println!("Received unhandled BNCS or Realm packet"),
                 _ => {}
             }
             // println!(
@@ -174,9 +179,9 @@ impl Connection {
             //}
             match tcp.get_destination() {
                 // game packet
-                4000 => self.d2gs_reader.read(tcp.payload()),
+                1119 | 4000 => self.d2gs_reader.read(tcp.payload()),
                 // bncs/realm packet -> not implemented yet
-                //6112 => println!("Received unhandled BNCS or Realm packet"),
+                //6112 | 6120 => println!("Received unhandled BNCS or Realm packet"),
                 _ => {}
             }
             // println!(

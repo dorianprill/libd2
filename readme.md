@@ -35,21 +35,29 @@ If you are interested in Diablo II and/or Rust, this might be fun!
    - [ ] active client / protocol state machine
 
 ## How to Build
+
 Building on windows requires some extra steps, otherwise it should be smooth sailing.  
 At this early stage I haven't created any bindings, but Python/JS would be useful to many people I guess.
-### Linux 
+
+### Linux
+
 Tested with Diablo 2 (Vanilla) and WINE, not tested with D2R yet because I don't have a vulkan capable machine
 `cargo build --release`
+
 ### Mac Os
+
 `cargo build --release` (not tested yet)
+
 ### Windows
-You will need to install npcap and additionally download the WinPcap Developers Pack as per the [libpnet](https://github.com/libpnet/libpnet) build instructions for Windows. Then point your user environment variable `LIB` (create if nonexistent) to the folder where to find Packet.lib i.e. `WpdPack/Lib/x64/` from the WinPcap Developers Pack you just downloaded. Then `cargo build --release`
-This will get the project building but the executable panics while querying the available network interfaces.  
-Turns out windows is very fickle and I might need to pull in the `windows` crate just to find the active interface.
+
+You will need to install `ncap` or the `WinPcap Developers Pack` as per the [libpnet](https://github.com/libpnet/libpnet) build instructions for Windows (I tested the latter). Then point your user environment variable `LIB` (create if nonexistent) to the folder where to find Packet.lib i.e. `WpdPack/Lib/x64/` from the WinPcap Developers Pack you just downloaded. Then `cargo build --release`
+This will get the project building.  
+Currently, in order to find the internet-connected network interface, it is necessary to disable disconnected-but-enabled interfaces (such as virtual adaperts for VPN).
 
 ## Usage
 
-One simple use case that is supported now is launching a listening client/connection to sniff d2gs packets:
+One simple use case that is supported now is launching a shadow client to sniff d2gs packets.  
+Put the following code in your main.rs and run it. Then start up your D2 or D2R game client, join a game and watch the game packets flow.
 
 ```Rust
 use libd2r::Client;
@@ -60,7 +68,7 @@ fn main() {
 }
 ```
 
-Please note that it does not fill any internal game data structures as of now (state update handling is still WIP). It will just filter, decode and print packets.
+Please note that currently it does not fill any internal game data structures (state update handling is still WIP). It will just filter, decode and print packets. Also, make sure to not have multiple game clients running as currently their packages will be indistinguishable in the output.
 
 ## Contributing
 
