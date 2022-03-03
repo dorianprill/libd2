@@ -1,5 +1,7 @@
 extern crate pnet;
 
+use pnet::ipnetwork::IpNetwork;
+
 //use self::pnet::packet::ethernet::Ethernet;
 use self::pnet::datalink::{self, NetworkInterface};
 use self::pnet::packet::ethernet::{EtherTypes, EthernetPacket, MutableEthernetPacket};
@@ -13,7 +15,7 @@ use self::pnet::util::MacAddr;
 
 //use std::env;
 //use std::io::{self, Write};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::process;
 use std::str;
 
@@ -46,15 +48,32 @@ impl Connection {
 
     pub fn init(&mut self) {
         // Find the first network interface connected to the internet
+        // FIXME this only works on linux, for windows discerning whether an 
+        // interface has an internet connection is not possible with libpnet
+        // maybe use 
+        // https://microsoft.github.io/windows-docs-rs/doc/windows/Networking/Connectivity/struct.ConnectionProfile.html#method.GetNetworkConnectivityLevel
+        // instead and have a special #[cfg(target_os = "windows")] init() method
         let interfaces = datalink::interfaces();
+        // linux/MacOs: should be easy to find an internet connected interface.
+        // TODO how to ensure it is the default iprouted one?
+        #[cfg(not(target_os = "windows"))]
         let some_if: Option<NetworkInterface> = Some(
             interfaces
                 .into_iter()
                 .find(|ref ifx| ifx.is_up() && !ifx.is_loopback() && !ifx.ips.is_empty())
                 .unwrap(),
         );
-
-        //let interface: NetworkInterface;
+        // windows: libpnet is not really helpful on windows as is_up() is always false. 
+        // additionally, there is no way to tell between a regular interface and a 
+        // disconnected interface with an ip (e.g. virtual adapter for VPN) 
+        // for use on windows, you should disable all devices that are not in use even if they are not connected.
+        #[cfg(target_os = "windows")]
+        let some_if: Option<NetworkInterface> = Some(
+            interfaces
+                .into_iter()
+                .find(|ref ifx| *(ifx.ips.first().unwrap()) != IpNetwork::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0).unwrap())
+                .unwrap(),
+        );
 
         if some_if != None {
             self.interface = some_if.unwrap();

@@ -9,7 +9,7 @@ If you are interested in Diablo II and/or Rust, this might be fun!
 ## Goals
 
 - cross platform without runtime/VM requirement  
-- provide game internal data structures and utility functions
+- provide game internal data structures and methods
 - savegame load/save support (for e.g. character editors, armory-style webpages)
 - implement the network protocol as fully supported as possible (i.e. however much is known publically)
 - reproduce game state as accurately as possible/needed
@@ -35,16 +35,17 @@ If you are interested in Diablo II and/or Rust, this might be fun!
    - [ ] active client / protocol state machine
 
 ## How to Build
-
-### Linux
+Building on windows requires some extra steps, otherwise it should be smooth sailing.  
+At this early stage I haven't created any bindings, but Python/JS would be useful to many people I guess.
+### Linux 
+Tested with Diablo 2 (Vanilla) and WINE, not tested with D2R yet because I don't have a vulkan capable machine
 `cargo build --release`
 ### Mac Os
 `cargo build --release` (not tested yet)
 ### Windows
 You will need to install npcap and additionally download the WinPcap Developers Pack as per the [libpnet](https://github.com/libpnet/libpnet) build instructions for Windows. Then point your user environment variable `LIB` (create if nonexistent) to the folder where to find Packet.lib i.e. `WpdPack/Lib/x64/` from the WinPcap Developers Pack you just downloaded. Then `cargo build --release`
-This should get the project building but the executable crashes while querying the available network interfaces on my machine (maybe need to adapt code for windows).    
-
-At this early stage i haven't created any bindings, but Python/JS would be useful to many people I guess.
+This will get the project building but the executable panics while querying the available network interfaces.  
+Turns out windows is very fickle and I might need to pull in the `windows` crate just to find the active interface.
 
 ## Usage
 
@@ -59,7 +60,7 @@ fn main() {
 }
 ```
 
-Plase note that it does not fill any internal game data structures as of now (state update handling is still WIP). It will just filter, decode and print packets.
+Please note that it does not fill any internal game data structures as of now (state update handling is still WIP). It will just filter, decode and print packets.
 
 ## Contributing
 
