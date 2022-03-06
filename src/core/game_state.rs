@@ -1,8 +1,7 @@
 use crate::ServerMessage;
-use crate::core::areas::ActId;
+use crate::core::act::Act;
 use crate::core::entity::npc::Npc;
 use crate::core::entity::player::Player;
-use crate::core::network::d2gs::D2GSPacket;
 use crate::core::object::item::Item;
 use crate::core::update::Update;
 

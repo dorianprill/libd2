@@ -1,9 +1,10 @@
 // Player struct
 
 use crate::ServerMessage;
+use crate::core::character_class::CharacterClass;
 use crate::core::coordinate::Coordinate;
 use crate::core::update::Update;
-use crate::core::{entity::Entity, network::d2gs::D2GSPacket};
+use crate::core::{entity::Entity};
 
 #[allow(dead_code)]
 pub struct Player {
@@ -84,15 +85,6 @@ impl Update for Player {
     }
 }
 
-pub enum CharacterClass {
-    Amazon = 0,
-    Sorceress = 1,
-    Necromancer = 2,
-    Paladin = 3,
-    Barbarian = 4,
-    Druid = 5,
-    Assassin = 6,
-}
 
 pub enum PlayerItemSlot {
     Helm = 0x01,
