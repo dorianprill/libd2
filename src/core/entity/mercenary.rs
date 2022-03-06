@@ -1,3 +1,4 @@
+use crate::ServerMessage;
 use crate::core::coordinate::Coordinate;
 use crate::core::update::Update;
 use crate::core::{entity::Entity, network::d2gs::D2GSPacket};
@@ -9,7 +10,7 @@ pub struct Mercenary {
 }
 
 impl Update for Mercenary {
-    fn update(&self, packet: D2GSPacket) -> bool {
+    fn update(&self, msg: ServerMessage) -> bool {
         // TODO match packets here e.g. MercUpdate etc.
         return true;
     }

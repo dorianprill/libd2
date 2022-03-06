@@ -1,3 +1,4 @@
+use crate::ServerMessage;
 use crate::core::areas::ActId;
 use crate::core::entity::npc::Npc;
 use crate::core::entity::player::Player;
@@ -48,7 +49,7 @@ pub struct GameState {
 }
 
 impl Update for GameState {
-    fn update(&self, packet: D2GSPacket) -> bool {
+    fn update(&self, packet: ServerMessage) -> bool {
         // match on packet ID here (first byte of message)
         // then pass on to respective handlers
         return true;

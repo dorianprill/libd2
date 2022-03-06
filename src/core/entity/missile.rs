@@ -1,6 +1,7 @@
+use crate::ServerMessage;
 use crate::core::coordinate::Coordinate;
 use crate::core::update::Update;
-use crate::core::{entity::Entity, network::d2gs::D2GSPacket};
+use crate::core::{entity::Entity};
 
 pub struct Missile {
     id: u32,
@@ -8,7 +9,7 @@ pub struct Missile {
 }
 
 impl Update for Missile {
-    fn update(&self, packet: D2GSPacket) -> bool {
+    fn update(&self, msg: ServerMessage) -> bool {
         // TODO match packets here e.g. MercUpdate etc.
         return true;
     }

@@ -98,7 +98,7 @@ impl D2GSReader {
             // index needs -1 since start is already header[0]?
             end = start + nheader + ndata;
             dbg!(end);
-            huffman::decompress(&raw[start + nheader..end], &mut decompressed_chunk); // ..end not included!
+            huffman::decode(&raw[start + nheader..end], &mut decompressed_chunk); // ..end not included!
             start = end + 1; // proceed with next chunk
             while !decompressed_chunk.is_empty() {
                 let mut actual_size: i32 = 0;
@@ -119,7 +119,6 @@ impl D2GSReader {
     pub fn handle_all(&mut self) {
         while let Some(p) = self.packets.pop_front() {
             println!("{}", p);
-            //game_packet_dispatch(&p);
         }
     }
 } // impl D2GSReader

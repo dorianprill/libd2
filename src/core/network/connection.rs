@@ -201,7 +201,7 @@ impl Connection {
 
     fn handle_transport_protocol(
         &mut self,
-        _interface_name: &str,
+        interface_name: &str,
         source: IpAddr,
         destination: IpAddr,
         protocol: IpNextHeaderProtocol,
@@ -211,18 +211,18 @@ impl Connection {
             IpNextHeaderProtocols::Udp => self.handle_udp_packet(source, destination, packet),
             IpNextHeaderProtocols::Tcp => self.handle_tcp_packet(source, destination, packet),
             _ => (),
-            // _ => println!(
-            //     "[{}]: Unhandled {} packet: {} > {}; protocol: {:?} length: {}",
-            //     interface_name,
-            //     match source {
-            //         IpAddr::V4(..) => "IPv4",
-            //         _ => "IPv6",
-            //     },
-            //     source,
-            //     destination,
-            //     protocol,
-            //     packet.len()
-            // ),
+            _ => println!(
+                "[{}]: Unhandled {} packet: {} > {}; protocol: {:?} length: {}",
+                interface_name,
+                match source {
+                    IpAddr::V4(..) => "IPv4",
+                    _ => "IPv6",
+                },
+                source,
+                destination,
+                protocol,
+                packet.len()
+            ),
         }
     }
 

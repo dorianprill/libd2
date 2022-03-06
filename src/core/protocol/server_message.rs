@@ -3,6 +3,11 @@
 /// blizzhackers: https://github.com/blizzhackers/Diablo2PacketsData/blob/main/src/data/1.14d/gs2client.json
 /// MephisTools: https://github.com/MephisTools/diablo2-protocol/blob/master/data/1.14/d2gs.json
 /// ServerMessage (Server->Client) is determined by the first byte of a D2GSPacket's data (enum value here)
+//use deku::prelude::*;
+
+
+//#[derive(Debug, PartialEq, DekuRead, DekuWrite)]
+//#[deku(type = "u8")]
 #[repr(u8)]
 pub enum ServerMessage {
     GameLoading = 0x00,
@@ -1061,6 +1066,8 @@ pub enum ServerMessage {
 ////////////////////////////////////////////////
 
 // Additional Containers and Bitfields
+//#[derive(Debug, PartialEq, DekuRead, DekuWrite)]
+#[repr(C)]
 pub struct SkillDescription {
     skill: u16,
     level: u8,

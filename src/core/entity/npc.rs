@@ -1,4 +1,4 @@
-use crate::core::coordinate::Coordinate;
+use crate::{core::coordinate::Coordinate, ServerMessage};
 use crate::core::update::Update;
 #[allow(dead_code)]
 use crate::core::{entity::Entity, network::d2gs::D2GSPacket};
@@ -9,7 +9,7 @@ pub struct Npc {
 }
 
 impl Update for Npc {
-    fn update(&self, packet: D2GSPacket) -> bool {
+    fn update(&self, msg: ServerMessage) -> bool {
         // TODO match packets here e.g. MercUpdate etc.
         return true;
     }

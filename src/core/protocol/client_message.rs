@@ -2,6 +2,7 @@
 /// Naming shall follow bnetdocs.org naming unless shown to be inappropriate.
 /// The specific arguments argument a packet takes is defined in the respective packet builders.
 /// The enum discriminants contain the correct packet data types for the corresponding packet type
+#[derive(Debug)]
 #[repr(u8)]
 pub enum ClientMessage {
     /// Walk to a specified (X,Y) map coordinate
