@@ -8,4 +8,5 @@ pub mod network;
 pub mod object;
 pub mod party;
 pub mod protocol;
+pub mod unit_stat;
 pub mod update;
