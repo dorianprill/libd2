@@ -5,18 +5,29 @@ use crate::core::entity::player::Player;
 use crate::core::object::item::Item;
 use crate::core::update::Update;
 
+
 pub enum GameServerType {
-    OpenBattleNet = 1,
-    TCPIP = 2,
-    SinglePlayer = 3,
+    OpenBattleNet   = 1,
+    TCPIP           = 2,
+    SinglePlayer    = 3,
 }
 
-#[allow(dead_code)]
-pub enum Difficulty {
-    Normal = 0,
-    Nightmare = 1,
-    Hell = 2,
+/// GameMode Flags as sent by GameList server message
+#[repr(u32)]
+pub enum GameMode {
+    Ladder    = 0x00200000,
+    Expansion = 0x00100000,
+    Hardcore  = 0x00000800
 }
+
+/// Difficulty flags as sent by GameList server message 
+#[repr(u16)]
+pub enum Difficulty {
+    Normal    = 0x0000,
+    Nightmare = 0x1000,
+    Hell      = 0x2000
+}
+
 
 #[allow(non_camel_case_types)]
 pub enum Locale {
@@ -26,12 +37,12 @@ pub enum Locale {
     frFR = 3,
     ptPT = 4,
     itIT = 5,
-    ja = 6,
-    ko = 7,
-    si = 8,
+    ja   = 6,
+    ko   = 7,
+    si   = 8,
     zhCN = 9,
-    pl = 10,
-    ru = 11,
+    pl   = 10,
+    ru   = 11,
     enGB = 12,
 }
 
@@ -42,8 +53,8 @@ pub struct GameState {
     //myself: &'a Player, // ref to players[0] ?
     pub(crate) players: Vec<Player>,
     pub(crate) npcs: Vec<Npc>,
-    pub(crate) game_type: Option<GameServerType>,
-    pub(crate) difficulty: Option<Difficulty>,
+    pub(crate) game_type: GameServerType,
+    pub(crate) difficulty: Difficulty,
     pub(crate) locale: Locale, //objects: Vec<WorldObject>, // TODO world object are ground items, stashes, corpses etc
 }
 

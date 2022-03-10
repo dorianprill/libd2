@@ -1,4 +1,4 @@
-use crate::core::game_state::{Difficulty, GameServerType, GameState, Locale};
+use crate::core::game_state::{Difficulty, GameServerType, GameState, Locale, GameMode};
 use crate::core::network::connection::Connection;
 
 pub enum Status {
@@ -36,11 +36,11 @@ impl Default for Client {
     fn default() -> Self {
         Client {
             game_state: GameState {
-                players: Vec::with_capacity(8),
-                npcs: Vec::with_capacity(1024),
-                game_type: None,
-                difficulty: None,
-                locale: Locale::enUS,
+                players:    Vec::with_capacity(8),
+                npcs:       Vec::with_capacity(1024),
+                game_type:  GameServerType::SinglePlayer,
+                difficulty: Difficulty::Normal,
+                locale:     Locale::enUS,
             },
             connection: Connection::new(),
         }
