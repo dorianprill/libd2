@@ -112,8 +112,7 @@ impl D2GSReader {
             }
         }
 
-        // After internal packet queue is filled, pop & handle all
-        self.handle_all();
+        // Packets remain queued for the caller to parse and apply to game state.
     }
 
     pub fn handle_all(&mut self) {
@@ -170,7 +169,7 @@ pub fn get_packet_size(input: &[u8], result: &mut i32) -> bool {
         }
         0x5B => {
             if size >= 3 {
-                *result = ((input[1] as i32) << 8) & input[2] as i32;
+                *result = ((input[2] as i32) << 8) | input[1] as i32;
                 return true;
             }
         }

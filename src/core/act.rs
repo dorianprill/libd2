@@ -1,5 +1,6 @@
 use std::fmt;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Act {
     Act1 = 0,
     Act2 = 1,
@@ -17,7 +18,6 @@ impl std::fmt::Display for Act {
             Act3 => "Act III",
             Act4 => "Act IV",
             Act5 => "Act V",
-            _    => "None"
         };
         write!(formatter, "{}", s)
     }

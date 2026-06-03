@@ -1,20 +1,19 @@
-# A Diablo II (Legacy) Library
+# A Diablo II Core and Client Library 
 
-A Diablo II library for core and simple client functionality, written in Rust for performance, safety and re-usability.
+A Diablo II library for core and simple client functionality, written in Rust for performance, safety and re-usability without any runtime requirements.
+
 
 This effort is very much WIP, so it is not available on crates.io yet.  
 
 If you are interested in Diablo II and/or Rust, this might be fun!
 
-## Goals
+## Long Term Goal
 
-- cross platform without runtime/VM requirement  
-- provide game internal data structures and methods
-- savegame load/save support (for e.g. character editors, armory-style webpages)
-- implement the network protocol as fully supported as possible (i.e. however much is known publically)
-- reproduce game state as accurately as possible/needed
+In the long term, the library aims to make it possible to write a headless client that can connect to the game servers and interact with the game world.
+An immediate use case is a game helper tool that visualizes the game state in real time (e.g. a map overlay, item and buff tracking, character reading for inspection, editing and download from bnet, etc. ) along with some QoL-functionality.
 
-## Milestones
+
+## Feature List
 
 1. network protocol support
    - [x] D2GS (plain)  
@@ -74,15 +73,26 @@ Please note that currently it does not fill any internal game data structures (s
 
 This is quite the challenge so any help is appreciated!  
 There is quite a bit of awesome code out there, but scattered across various sources.  
-Maybe you want to help translating this [d2r savegame utility from go](https://github.com/Vitalick/go-d2editor) (for D2R save files)?  
-Or help with the map generation from game seed? It exists in several projects (d2bs, opendiablo, opend2, ...) and shouldn't have changed for D2R.
+> Update: We now have AI to translate and consolidate all the awesome code out there into this library, so the need for help is not as big as it was before. But if you want to contribute, feel free to reach out!
 
-## Disclaimer
+## Disclaimer and Credits
 
-Little of this works yet and most probably never will. Unless you feel like contributing, which is welcome, it is mostly an exercise.  
-Here are some great resources on the original game:
+Little of this works yet and probably never will as i haven't started  working on the tool that will use this library as a dependency (see section `Long term Goal`).
+
+Here are some great resources on the original game, thanks to everyone who has been working on reverse engineering and botting for this game over the years, without you this would not be possible:
 
 - [client-less C# bot by dkuwahara](https://github.com/dkuwahara/OmegaBot)
 - a [blog post by Eric Carmichael](http://www.ericcarmichael.com/my-diablo-2-botting-phase.html)  
 - and, of course, [D2BS](https://github.com/noah-/d2bs)
 - Another good resource is the [diablo 2 protocol js library](https://github.com/MephisTools/diablo2-protocol).
+- - https://github.com/blizzhackers/kolbot (Data structures and game mechanics)
+- https://github.com/blizzhackers/kolbot-SoloPlay (Solo play strategy  implementation)
+- https://github.com/blacha/diablo2  (Network traffic interception and parsing and visualization of game state)
+- https://github.com/OpenDiablo2/OpenDiablo2 (Reverse engineering of game mechanics and data structures, as well as implementation of a custom game client, ARCHIVED)
+- https://github.com/eezstreet/OpenD2 (Reverse engineering of game mechanics and data structures, as well as implementation of a custom game client, ARCHIVED?)
+- https://github.com/nokka/d2s (character file parsing for slashdiablo's armory)
+- https://github.com/krisives/d2s-format (D2 character file format specification)
+- https://github.com/dschu012/D2SLib Savefile support for 1.10 (LoD) to 1.15 (d2r)
+- https://github.com/emmericp/diablo2-maps (Map generation from game seed and reverse engineering of seed from map)
+- https://github.com/Vitalick/go-d2editor (Character file parsing and generation, savegame load/save support, tests)
+- https://github.com/crabsmadethis/d2r-horadric-tools (character loading/saving, character generation from descriptions (we can use this for testing?), MCP functionality (we dont need mcp) but we can use the character file parsing and generation)

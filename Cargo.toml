@@ -24,4 +24,3 @@ exclude = [
 
 [dependencies]
 pnet = "0.29.0"
-deku = "0.13"

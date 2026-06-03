@@ -1,15 +1,15 @@
 use std::fmt;
 
-use crate::ServerMessage;
 use crate::core::coordinate::Coordinate;
+use crate::core::entity::Entity;
 use crate::core::update::Update;
-use crate::core::{entity::Entity};
+use crate::ServerMessage;
 
 pub enum MercenaryClass {
     FromAct1 = 0x010f,
     FromAct2 = 0x0152,
     FromAct3 = 0x0167,
-    FromAct5 = 0x0231
+    FromAct5 = 0x0231,
 }
 
 impl std::fmt::Display for MercenaryClass {
@@ -20,12 +20,10 @@ impl std::fmt::Display for MercenaryClass {
             FromAct2 => "Desert Mercenary",
             FromAct3 => "Iron Wolf",
             FromAct5 => "Barbarian",
-            _    => "None"
         };
         write!(formatter, "{}", s)
     }
 }
-
 
 #[allow(dead_code)]
 pub struct Mercenary {
@@ -35,7 +33,7 @@ pub struct Mercenary {
 }
 
 impl Update for Mercenary {
-    fn update(&self, msg: ServerMessage) -> bool {
+    fn update(&mut self, _msg: ServerMessage) -> bool {
         // TODO match packets here e.g. MercUpdate etc.
         return true;
     }

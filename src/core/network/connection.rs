@@ -1,5 +1,6 @@
 extern crate pnet;
 
+#[cfg(target_os = "windows")]
 use pnet::ipnetwork::IpNetwork;
 
 //use self::pnet::packet::ethernet::Ethernet;
@@ -15,12 +16,15 @@ use self::pnet::util::MacAddr;
 
 //use std::env;
 //use std::io::{self, Write};
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::IpAddr;
+#[cfg(target_os = "windows")]
+use std::net::Ipv4Addr;
 use std::process;
 use std::str;
 
 //use std::collections::BinaryHeap;
 //use connection::raw_packet::RawPacket;
+use crate::core::game_state::GameState;
 use crate::core::network::d2gs::D2GSReader;
 
 // There are three different connections involved:
@@ -30,7 +34,7 @@ use crate::core::network::d2gs::D2GSReader;
 //     6112 UDP for D2Vanilla
 //     6120 UDP for D2R (PC)
 // D2GS:  The diablo2 game server protocol
-//   Ports: 
+//   Ports:
 //     4000 TCP for D2Vanilla
 //     1119 TCP for D2R (PC)
 
@@ -54,9 +58,9 @@ impl Connection {
 
     pub fn init(&mut self) {
         // Find the first network interface connected to the internet
-        // FIXME this only works on linux, for windows discerning whether an 
+        // FIXME this only works on linux, for windows discerning whether an
         // interface has an internet connection is not possible with libpnet
-        // maybe use 
+        // maybe use
         // https://microsoft.github.io/windows-docs-rs/doc/windows/Networking/Connectivity/struct.ConnectionProfile.html#method.GetNetworkConnectivityLevel
         let interfaces = datalink::interfaces();
         // linux/MacOs: should be easy to find an internet connected interface.
@@ -68,15 +72,18 @@ impl Connection {
                 .find(|ref ifx| ifx.is_up() && !ifx.is_loopback() && !ifx.ips.is_empty())
                 .unwrap(),
         );
-        // windows: libpnet is not really helpful on windows as is_up() is always false. 
-        // additionally, there is no way to tell between a regular interface and a 
-        // disconnected interface with an ip (e.g. virtual adapter for VPN) 
+        // windows: libpnet is not really helpful on windows as is_up() is always false.
+        // additionally, there is no way to tell between a regular interface and a
+        // disconnected interface with an ip (e.g. virtual adapter for VPN)
         // for use on windows, you should disable all devices that are not in use even if they are not connected.
         #[cfg(target_os = "windows")]
         let some_if: Option<NetworkInterface> = Some(
             interfaces
                 .into_iter()
-                .find(|ref ifx| *(ifx.ips.first().unwrap()) != IpNetwork::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0).unwrap())
+                .find(|ref ifx| {
+                    *(ifx.ips.first().unwrap())
+                        != IpNetwork::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0).unwrap()
+                })
                 .unwrap(),
         );
 
@@ -95,7 +102,7 @@ impl Connection {
     //pub fn build_packet() -> pnet::packet::TcpPacket {}
     // add_packet allows external modules to add packages for injecting
     //pub fn add_packet() -> bool {}
-    pub fn listen(&mut self) {
+    pub fn listen(&mut self, game_state: &mut GameState) {
         use self::pnet::datalink::Channel::Ethernet;
         let interface = self.interface.clone();
         if !self.initialized {
@@ -131,16 +138,30 @@ impl Connection {
                             continue;
                         }
                         fake_ethernet_frame.set_payload(&packet);
-                        self.handle_ethernet_frame(&interface, &fake_ethernet_frame.to_immutable());
+                        self.handle_ethernet_frame(
+                            &interface,
+                            &fake_ethernet_frame.to_immutable(),
+                            game_state,
+                        );
                     }
-                    self.handle_ethernet_frame(&interface, &EthernetPacket::new(packet).unwrap());
+                    self.handle_ethernet_frame(
+                        &interface,
+                        &EthernetPacket::new(packet).unwrap(),
+                        game_state,
+                    );
                 }
                 Err(e) => panic!("unable to receive packet: {}", e),
             }
         }
     }
 
-    fn handle_udp_packet(&mut self, _source: IpAddr, _destination: IpAddr, packet: &[u8]) {
+    fn handle_udp_packet(
+        &mut self,
+        _source: IpAddr,
+        _destination: IpAddr,
+        packet: &[u8],
+        game_state: &mut GameState,
+    ) {
         let udp = UdpPacket::new(packet);
 
         if let Some(udp) = udp {
@@ -150,7 +171,7 @@ impl Connection {
             //}
             match udp.get_destination() {
                 // game packet
-                1119 | 4000 => self.d2gs_reader.read(udp.payload()),
+                1119 | 4000 => self.read_d2gs_payload(udp.payload(), game_state),
                 // bncs/realm packet -> not implemented yet
                 //6112 | 6120 => println!("Received unhandled BNCS or Realm packet"),
                 _ => {}
@@ -170,7 +191,13 @@ impl Connection {
         }
     }
 
-    fn handle_tcp_packet(&mut self, _source: IpAddr, _destination: IpAddr, packet: &[u8]) {
+    fn handle_tcp_packet(
+        &mut self,
+        _source: IpAddr,
+        _destination: IpAddr,
+        packet: &[u8],
+        game_state: &mut GameState,
+    ) {
         let tcp = TcpPacket::new(packet);
         if let Some(tcp) = tcp {
             // filter packet by ports used by d2, will continue for both sent & received
@@ -179,7 +206,7 @@ impl Connection {
             //}
             match tcp.get_destination() {
                 // game packet
-                1119 | 4000 => self.d2gs_reader.read(tcp.payload()),
+                1119 | 4000 => self.read_d2gs_payload(tcp.payload(), game_state),
                 // bncs/realm packet -> not implemented yet
                 //6112 | 6120 => println!("Received unhandled BNCS or Realm packet"),
                 _ => {}
@@ -201,32 +228,30 @@ impl Connection {
 
     fn handle_transport_protocol(
         &mut self,
-        interface_name: &str,
+        _interface_name: &str,
         source: IpAddr,
         destination: IpAddr,
         protocol: IpNextHeaderProtocol,
         packet: &[u8],
+        game_state: &mut GameState,
     ) {
         match protocol {
-            IpNextHeaderProtocols::Udp => self.handle_udp_packet(source, destination, packet),
-            IpNextHeaderProtocols::Tcp => self.handle_tcp_packet(source, destination, packet),
+            IpNextHeaderProtocols::Udp => {
+                self.handle_udp_packet(source, destination, packet, game_state)
+            }
+            IpNextHeaderProtocols::Tcp => {
+                self.handle_tcp_packet(source, destination, packet, game_state)
+            }
             _ => (),
-            _ => println!(
-                "[{}]: Unhandled {} packet: {} > {}; protocol: {:?} length: {}",
-                interface_name,
-                match source {
-                    IpAddr::V4(..) => "IPv4",
-                    _ => "IPv6",
-                },
-                source,
-                destination,
-                protocol,
-                packet.len()
-            ),
         }
     }
 
-    fn handle_ipv4_packet(&mut self, interface_name: &str, ethernet: &EthernetPacket) {
+    fn handle_ipv4_packet(
+        &mut self,
+        interface_name: &str,
+        ethernet: &EthernetPacket,
+        game_state: &mut GameState,
+    ) {
         let header = Ipv4Packet::new(ethernet.payload());
         if let Some(header) = header {
             self.handle_transport_protocol(
@@ -235,13 +260,19 @@ impl Connection {
                 IpAddr::V4(header.get_destination()),
                 header.get_next_level_protocol(),
                 header.payload(),
+                game_state,
             );
         } else {
             println!("[{}]: Malformed IPv4 Packet", interface_name);
         }
     }
 
-    fn handle_ipv6_packet(&mut self, interface_name: &str, ethernet: &EthernetPacket) {
+    fn handle_ipv6_packet(
+        &mut self,
+        interface_name: &str,
+        ethernet: &EthernetPacket,
+        game_state: &mut GameState,
+    ) {
         let header = Ipv6Packet::new(ethernet.payload());
         if let Some(header) = header {
             self.handle_transport_protocol(
@@ -250,27 +281,39 @@ impl Connection {
                 IpAddr::V6(header.get_destination()),
                 header.get_next_header(),
                 header.payload(),
+                game_state,
             );
         } else {
             println!("[{}]: Malformed IPv6 Packet", interface_name);
         }
     }
 
-    fn handle_ethernet_frame(&mut self, interface: &NetworkInterface, ethernet: &EthernetPacket) {
+    fn handle_ethernet_frame(
+        &mut self,
+        interface: &NetworkInterface,
+        ethernet: &EthernetPacket,
+        game_state: &mut GameState,
+    ) {
         let interface_name = &interface.name[..];
         match ethernet.get_ethertype() {
-                EtherTypes::Ipv4 => self.handle_ipv4_packet(interface_name, ethernet),
-                EtherTypes::Ipv6 => self.handle_ipv6_packet(interface_name, ethernet),
-                _ => ()
-                    // TODO make debug only print
-                    // println!(
-                    // "[{}]: Unknown packet: {} > {}; ethertype: {:?} length: {}",
-                    // interface_name,
-                    // ethernet.get_source(),
-                    // ethernet.get_destination(),
-                    // ethernet.get_ethertype(),
-                    // ethernet.packet().len()
-                //),
-            }
+            EtherTypes::Ipv4 => self.handle_ipv4_packet(interface_name, ethernet, game_state),
+            EtherTypes::Ipv6 => self.handle_ipv6_packet(interface_name, ethernet, game_state),
+            _ => (), // TODO make debug only print
+                     // println!(
+                     // "[{}]: Unknown packet: {} > {}; ethertype: {:?} length: {}",
+                     // interface_name,
+                     // ethernet.get_source(),
+                     // ethernet.get_destination(),
+                     // ethernet.get_ethertype(),
+                     // ethernet.packet().len()
+                     //),
+        }
+    }
+
+    fn read_d2gs_payload(&mut self, payload: &[u8], game_state: &mut GameState) {
+        self.d2gs_reader.read(payload);
+        while let Some(packet) = self.d2gs_reader.next() {
+            let _ = game_state.apply_packet(&packet);
+        }
     }
 }

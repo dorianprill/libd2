@@ -1,12 +1,14 @@
 // Player struct
 
-use crate::ServerMessage;
+use std::collections::HashMap;
+
 use crate::core::character_class::CharacterClass;
 use crate::core::coordinate::Coordinate;
+use crate::core::entity::Entity;
 use crate::core::update::Update;
-use crate::core::{entity::Entity};
+use crate::ServerMessage;
 
-#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Player {
     class: CharacterClass,
     name: String,
@@ -17,6 +19,7 @@ pub struct Player {
     mercenary_id: u32,
     level: u32,
     portal_id: u32,
+    stats: HashMap<u16, u32>,
     // TODO
     // stash:       Container;
     // cube:        Container;
@@ -24,8 +27,44 @@ pub struct Player {
 }
 
 impl Player {
-    pub fn name(self) -> String {
-        self.name
+    pub fn new(
+        id: u32,
+        class: CharacterClass,
+        name: impl Into<String>,
+        location: Coordinate,
+    ) -> Self {
+        Self {
+            class,
+            name: name.into(),
+            id,
+            location,
+            has_mercenary: false,
+            directory_known: false,
+            mercenary_id: 0,
+            level: 0,
+            portal_id: 0,
+            stats: HashMap::new(),
+        }
+    }
+
+    pub fn class(&self) -> CharacterClass {
+        self.class
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn set_name(&mut self, name: impl Into<String>) {
+        self.name = name.into();
+    }
+
+    pub fn set_class(&mut self, class: CharacterClass) {
+        self.class = class;
+    }
+
+    pub fn set_location(&mut self, location: Coordinate) {
+        self.location = location;
     }
 
     pub fn has_mercenary(&self) -> bool {
@@ -62,6 +101,19 @@ impl Player {
         self.portal_id = portal_id;
         portal_id
     }
+
+    pub fn stat(&self, stat_id: u16) -> Option<u32> {
+        self.stats.get(&stat_id).copied()
+    }
+
+    pub fn set_stat(&mut self, stat_id: u16, value: u32) {
+        self.stats.insert(stat_id, value);
+    }
+
+    pub fn add_stat(&mut self, stat_id: u16, value: u32) {
+        let current = self.stat(stat_id).unwrap_or_default();
+        self.set_stat(stat_id, current.saturating_add(value));
+    }
 }
 
 impl Entity for Player {
@@ -79,12 +131,11 @@ impl Entity for Player {
 }
 
 impl Update for Player {
-    fn update(&self, msg: ServerMessage) -> bool {
+    fn update(&mut self, _msg: ServerMessage) -> bool {
         // TODO match packets here e.g. MercUpdate etc.
         return true;
     }
 }
-
 
 pub enum PlayerItemSlot {
     Helm = 0x01,

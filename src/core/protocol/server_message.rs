@@ -3,11 +3,9 @@
 /// blizzhackers: https://github.com/blizzhackers/Diablo2PacketsData/blob/main/src/data/1.14d/gs2client.json
 /// MephisTools: https://github.com/MephisTools/diablo2-protocol/blob/master/data/1.14/d2gs.json
 /// ServerMessage (Server->Client) is determined by the first byte of a D2GSPacket's data (enum value here)
-//use deku::prelude::*;
+use crate::core::network::d2gs::D2GSPacket;
 
-
-//#[derive(Debug, PartialEq, DekuRead, DekuWrite)]
-//#[deku(type = "u8")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ServerMessage {
     GameLoading = 0x00,
@@ -167,7 +165,7 @@ pub enum ServerMessage {
     /// Y (16bits)
     /// dX (8bits)
     /// dY (8bits)
-    /// TODO parse out into own values with crate 'deku'
+    /// TODO parse out into own values.
     HPMPUPDATE {
         packed_bits: [u8; 14],
     } = 0x18,
@@ -552,9 +550,8 @@ pub enum ServerMessage {
         unit_type: u8,
         target_x: u16,
         target_y: u16,
-        unknown1: u8,
+        unknown1: u16,
         unknown2: u8,
-        unknown3: u8,
         velocity: u16,
         unknown4: u8,
     } = 0x67,
@@ -1003,7 +1000,7 @@ pub enum ServerMessage {
         unit_y: u16,
         life_percent: u8,
         packet_size: u8,
-        bitstream: [u8; 243], //{ "BYTE" : "BitStream[nFullPacketSize - 13]" } FIXME maximum packet size
+        bitstream: Vec<u8>, // { "BYTE" : "BitStream[nFullPacketSize - 13]" }
     } = 0xAC,
 
     Unknown35 {
@@ -1066,9 +1063,587 @@ pub enum ServerMessage {
 ////////////////////////////////////////////////
 
 // Additional Containers and Bitfields
-//#[derive(Debug, PartialEq, DekuRead, DekuWrite)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[repr(C)]
 pub struct SkillDescription {
     skill: u16,
     level: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServerMessageParseError {
+    EmptyPacket,
+    UnsupportedPacketId(u8),
+    UnexpectedLength {
+        packet_id: u8,
+        expected: usize,
+        actual: usize,
+    },
+}
+
+impl ServerMessage {
+    pub fn parse(input: &[u8]) -> Result<Self, ServerMessageParseError> {
+        let packet_id = *input.first().ok_or(ServerMessageParseError::EmptyPacket)?;
+
+        match packet_id {
+            0x00 => parse_empty(input, Self::GameLoading),
+            0x01 => {
+                let mut cursor = PacketCursor::new(input, 8)?;
+                Ok(Self::GameFlags {
+                    difficulty: cursor.u8(),
+                    arena_flags: cursor.u32_le(),
+                    is_expansion: cursor.u8(),
+                    is_ladder: cursor.u8(),
+                })
+            }
+            0x02 => parse_empty(input, Self::LoadSuccessful),
+            0x03 => {
+                let mut cursor = PacketCursor::new(input, 12)?;
+                Ok(Self::LoadAct {
+                    act: cursor.u8(),
+                    map_id: cursor.u32_le(),
+                    area_id: cursor.u16_le(),
+                    automap: cursor.u32_le(),
+                })
+            }
+            0x04 => parse_empty(input, Self::LoadComplete),
+            0x05 => parse_empty(input, Self::UnloadComplete),
+            0x06 => parse_empty(input, Self::GameExitSuccessful),
+            0x07 => {
+                let mut cursor = PacketCursor::new(input, 6)?;
+                Ok(Self::MapReveal {
+                    tile_x: cursor.u16_le(),
+                    tile_y: cursor.u16_le(),
+                    area_id: cursor.u8(),
+                })
+            }
+            0x08 => {
+                let mut cursor = PacketCursor::new(input, 6)?;
+                Ok(Self::MapHide {
+                    tile_x: cursor.u16_le(),
+                    tile_y: cursor.u16_le(),
+                    area_id: cursor.u8(),
+                })
+            }
+            0x09 => {
+                let mut cursor = PacketCursor::new(input, 11)?;
+                Ok(Self::AssignLevelWarp {
+                    unit_type: cursor.u8(),
+                    unit_id: cursor.u32_le(),
+                    warp_class_id: cursor.u8(),
+                    warp_x: cursor.u16_le(),
+                    warp_y: cursor.u16_le(),
+                })
+            }
+            0x0A => {
+                let mut cursor = PacketCursor::new(input, 6)?;
+                Ok(Self::RemoveObject {
+                    unit_type: cursor.u8(),
+                    unit_id: cursor.u32_le(),
+                })
+            }
+            0x0B => {
+                let mut cursor = PacketCursor::new(input, 6)?;
+                Ok(Self::GameHandshake {
+                    unit_type: cursor.u8(),
+                    unit_id: cursor.u32_le(),
+                })
+            }
+            0x0C => {
+                let mut cursor = PacketCursor::new(input, 9)?;
+                Ok(Self::NpcHit {
+                    unit_type: cursor.u8(),
+                    unit_id: cursor.u32_le(),
+                    animation_id: cursor.u16_le(),
+                    alive: cursor.u8(),
+                })
+            }
+            0x0D => {
+                let mut cursor = PacketCursor::new(input, 13)?;
+                Ok(Self::PlayerStop {
+                    unit_type: cursor.u8(),
+                    unit_id: cursor.u32_le(),
+                    hit_class: cursor.u8(),
+                    x: cursor.u16_le(),
+                    y: cursor.u16_le(),
+                    unit_hit_class: cursor.u8(),
+                    alive: cursor.u8(),
+                })
+            }
+            0x0E => {
+                let mut cursor = PacketCursor::new(input, 12)?;
+                Ok(Self::ObjectState {
+                    unit_type: cursor.u8(),
+                    unit_id: cursor.u32_le(),
+                    portal_flags: cursor.u8(),
+                    is_targetable: cursor.u8(),
+                    unit_state: cursor.u32_le(),
+                })
+            }
+            0x0F => {
+                let mut cursor = PacketCursor::new(input, 16)?;
+                Ok(Self::PlayerMove {
+                    unit_type: cursor.u8(),
+                    unit_id: cursor.u32_le(),
+                    move_type: cursor.u8(),
+                    target_x: cursor.u16_le(),
+                    target_y: cursor.u16_le(),
+                    unit_hit_class: cursor.u8(),
+                    current_x: cursor.u16_le(),
+                    current_y: cursor.u16_le(),
+                })
+            }
+            0x10 => {
+                let mut cursor = PacketCursor::new(input, 16)?;
+                Ok(Self::CharToObject {
+                    player_type: cursor.u8(),
+                    player_id: cursor.u32_le(),
+                    movement_type: cursor.u8(),
+                    target_type: cursor.u8(),
+                    target_id: cursor.u32_le(),
+                    target_x: cursor.u16_le(),
+                    target_y: cursor.u16_le(),
+                })
+            }
+            0x11 => {
+                let mut cursor = PacketCursor::new(input, 8)?;
+                Ok(Self::ReportKill {
+                    unit_type: cursor.u8(),
+                    unit_id: cursor.u32_le(),
+                    unknown: cursor.u16_le(),
+                })
+            }
+            0x15 => {
+                let mut cursor = PacketCursor::new(input, 11)?;
+                Ok(Self::ReassignPlayer {
+                    unit_type: cursor.u8(),
+                    unit_id: cursor.u32_le(),
+                    x: cursor.u16_le(),
+                    y: cursor.u16_le(),
+                    value: cursor.u8(),
+                })
+            }
+            0x19 => {
+                let mut cursor = PacketCursor::new(input, 2)?;
+                Ok(Self::SmallGoldPickup {
+                    amount: cursor.u8(),
+                })
+            }
+            0x1A => {
+                let mut cursor = PacketCursor::new(input, 2)?;
+                Ok(Self::AddExpU8 {
+                    amount: cursor.u8(),
+                })
+            }
+            0x1B => {
+                let mut cursor = PacketCursor::new(input, 3)?;
+                Ok(Self::AddExpU16 {
+                    amount: cursor.u16_le(),
+                })
+            }
+            0x1C => {
+                let mut cursor = PacketCursor::new(input, 5)?;
+                Ok(Self::AddExpU32 {
+                    amount: cursor.u32_le(),
+                })
+            }
+            0x1D => {
+                let mut cursor = PacketCursor::new(input, 3)?;
+                Ok(Self::SetAttributeU8 {
+                    attribute: cursor.u8(),
+                    amount: cursor.u8(),
+                })
+            }
+            0x1E => {
+                let mut cursor = PacketCursor::new(input, 4)?;
+                Ok(Self::SetAttributeU16 {
+                    attribute: cursor.u8(),
+                    amount: cursor.u16_le(),
+                })
+            }
+            0x1F => {
+                let mut cursor = PacketCursor::new(input, 6)?;
+                Ok(Self::SetAttributeU32 {
+                    attribute: cursor.u8(),
+                    amount: cursor.u32_le(),
+                })
+            }
+            0x20 => {
+                let mut cursor = PacketCursor::new(input, 10)?;
+                Ok(Self::AttributeUpdate {
+                    unit_id: cursor.u32_le(),
+                    attribute: cursor.u8(),
+                    amount: cursor.u32_le(),
+                })
+            }
+            0x51 => {
+                let mut cursor = PacketCursor::new(input, 14)?;
+                Ok(Self::WorldObject {
+                    object_type: cursor.u8(),
+                    object_id: cursor.u32_le(),
+                    object_class: cursor.u16_le(),
+                    x: cursor.u16_le(),
+                    y: cursor.u16_le(),
+                    state: cursor.u8(),
+                    interaction: cursor.u8(),
+                })
+            }
+            0x59 => {
+                let mut cursor = PacketCursor::new(input, 26)?;
+                Ok(Self::AssignPlayer {
+                    unit_id: cursor.u32_le(),
+                    class: cursor.u8(),
+                    szname: cursor.array(),
+                    x: cursor.u16_le(),
+                    y: cursor.u16_le(),
+                })
+            }
+            0x5B => {
+                let mut cursor = PacketCursor::new_variable(input, 36, 1)?;
+                let packet_length = cursor.u16_le();
+                if packet_length as usize != input.len() {
+                    return Err(ServerMessageParseError::UnexpectedLength {
+                        packet_id,
+                        expected: packet_length as usize,
+                        actual: input.len(),
+                    });
+                }
+                Ok(Self::PlayerJoined {
+                    packet_length,
+                    player_id: cursor.u32_le(),
+                    character_class: cursor.u8(),
+                    character_name: cursor.array(),
+                    character_level: cursor.u16_le(),
+                    party_id: cursor.u16_le(),
+                    unknown: cursor.array(),
+                })
+            }
+            0x5C => {
+                let mut cursor = PacketCursor::new(input, 5)?;
+                Ok(Self::PlayerLeft {
+                    player_id: cursor.u32_le(),
+                })
+            }
+            0x67 => {
+                let mut cursor = PacketCursor::new(input, 16)?;
+                Ok(Self::NpcMove {
+                    unit_id: cursor.u32_le(),
+                    unit_type: cursor.u8(),
+                    target_x: cursor.u16_le(),
+                    target_y: cursor.u16_le(),
+                    unknown1: cursor.u16_le(),
+                    unknown2: cursor.u8(),
+                    velocity: cursor.u16_le(),
+                    unknown4: cursor.u8(),
+                })
+            }
+            0x68 => {
+                let mut cursor = PacketCursor::new(input, 21)?;
+                Ok(Self::NpcMoveToEntity {
+                    unit_id: cursor.u32_le(),
+                    move_type: cursor.u8(),
+                    target_x: cursor.u16_le(),
+                    target_y: cursor.u16_le(),
+                    target_unit_type: cursor.u8(),
+                    target_id: cursor.u32_le(),
+                    unknown1: cursor.u16_le(),
+                    unknown2: cursor.u8(),
+                    unused: cursor.u16_le(),
+                    unknown4: cursor.u8(),
+                })
+            }
+            0x69 => {
+                let mut cursor = PacketCursor::new(input, 12)?;
+                Ok(Self::NpcStateUpdate {
+                    unit_id: cursor.u32_le(),
+                    state: cursor.u8(),
+                    x: cursor.u16_le(),
+                    y: cursor.u16_le(),
+                    unit_life: cursor.u8(),
+                    hit_class: cursor.u8(),
+                })
+            }
+            0x6B => {
+                let mut cursor = PacketCursor::new(input, 16)?;
+                Ok(Self::NpcAction {
+                    unit_id: cursor.u32_le(),
+                    action: cursor.u8(),
+                    unknown: cursor.array(),
+                    x: cursor.u16_le(),
+                    y: cursor.u16_le(),
+                })
+            }
+            0x6C => {
+                let mut cursor = PacketCursor::new(input, 16)?;
+                Ok(Self::NpcAttack {
+                    unit_id: cursor.u32_le(),
+                    attack_type: cursor.u16_le(),
+                    target_id: cursor.u32_le(),
+                    target_type: cursor.u8(),
+                    target_x: cursor.u16_le(),
+                    target_y: cursor.u16_le(),
+                })
+            }
+            0x6D => {
+                let mut cursor = PacketCursor::new(input, 10)?;
+                Ok(Self::NpcStop {
+                    unit_id: cursor.u32_le(),
+                    x: cursor.u16_le(),
+                    y: cursor.u16_le(),
+                    unit_life: cursor.u8(),
+                })
+            }
+            0xAB => {
+                let mut cursor = PacketCursor::new(input, 7)?;
+                Ok(Self::NpcHeal {
+                    unit_type: cursor.u8(),
+                    unit_id: cursor.u32_le(),
+                    unit_life: cursor.u8(),
+                })
+            }
+            0xAC => {
+                let mut cursor = PacketCursor::new_variable(input, 13, 12)?;
+                let unit_id = cursor.u32_le();
+                let unit_code = cursor.u16_le();
+                let unit_x = cursor.u16_le();
+                let unit_y = cursor.u16_le();
+                let life_percent = cursor.u8();
+                let packet_size = cursor.u8();
+                if packet_size as usize != input.len() {
+                    return Err(ServerMessageParseError::UnexpectedLength {
+                        packet_id,
+                        expected: packet_size as usize,
+                        actual: input.len(),
+                    });
+                }
+                Ok(Self::MonsterAssign {
+                    unit_id,
+                    unit_code,
+                    unit_x,
+                    unit_y,
+                    life_percent,
+                    packet_size,
+                    bitstream: cursor.remaining().to_vec(),
+                })
+            }
+            _ => Err(ServerMessageParseError::UnsupportedPacketId(packet_id)),
+        }
+    }
+}
+
+impl TryFrom<&D2GSPacket> for ServerMessage {
+    type Error = ServerMessageParseError;
+
+    fn try_from(packet: &D2GSPacket) -> Result<Self, Self::Error> {
+        Self::parse(&packet.data)
+    }
+}
+
+fn parse_empty(
+    input: &[u8],
+    message: ServerMessage,
+) -> Result<ServerMessage, ServerMessageParseError> {
+    let packet_id = input[0];
+    if input.len() == 1 {
+        Ok(message)
+    } else {
+        Err(ServerMessageParseError::UnexpectedLength {
+            packet_id,
+            expected: 1,
+            actual: input.len(),
+        })
+    }
+}
+
+struct PacketCursor<'a> {
+    packet_id: u8,
+    bytes: &'a [u8],
+    position: usize,
+}
+
+impl<'a> PacketCursor<'a> {
+    fn new(input: &'a [u8], expected_len: usize) -> Result<Self, ServerMessageParseError> {
+        let packet_id = input[0];
+        if input.len() != expected_len {
+            return Err(ServerMessageParseError::UnexpectedLength {
+                packet_id,
+                expected: expected_len,
+                actual: input.len(),
+            });
+        }
+
+        Ok(Self {
+            packet_id,
+            bytes: &input[1..],
+            position: 0,
+        })
+    }
+
+    fn new_variable(
+        input: &'a [u8],
+        min_len: usize,
+        length_offset: usize,
+    ) -> Result<Self, ServerMessageParseError> {
+        let packet_id = input[0];
+        if input.len() < min_len {
+            let expected = input
+                .get(length_offset)
+                .copied()
+                .map(usize::from)
+                .unwrap_or(min_len);
+            return Err(ServerMessageParseError::UnexpectedLength {
+                packet_id,
+                expected,
+                actual: input.len(),
+            });
+        }
+
+        Ok(Self {
+            packet_id,
+            bytes: &input[1..],
+            position: 0,
+        })
+    }
+
+    fn u8(&mut self) -> u8 {
+        let value = self.bytes[self.position];
+        self.position += 1;
+        value
+    }
+
+    fn u16_le(&mut self) -> u16 {
+        u16::from_le_bytes(self.array())
+    }
+
+    fn u32_le(&mut self) -> u32 {
+        u32::from_le_bytes(self.array())
+    }
+
+    fn array<const N: usize>(&mut self) -> [u8; N] {
+        let end = self.position + N;
+        let value = self.bytes[self.position..end]
+            .try_into()
+            .unwrap_or_else(|_| panic!("packet 0x{:02X} parser over-read", self.packet_id));
+        self.position = end;
+        value
+    }
+
+    fn remaining(&self) -> &'a [u8] {
+        &self.bytes[self.position..]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ServerMessage, ServerMessageParseError};
+    use crate::core::network::d2gs::D2GSReader;
+
+    #[test]
+    fn parse_game_flags_reads_little_endian_arena_flags() {
+        let message = ServerMessage::parse(&[0x01, 0x02, 0x04, 0x00, 0x10, 0x00, 0x01, 0x00])
+            .expect("game flags should parse");
+
+        assert_eq!(
+            message,
+            ServerMessage::GameFlags {
+                difficulty: 0x02,
+                arena_flags: 0x0010_0004,
+                is_expansion: 0x01,
+                is_ladder: 0x00,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_load_act_reads_seed_area_and_automap() {
+        let message = ServerMessage::parse(&[
+            0x03, 0x01, 0x44, 0x33, 0x22, 0x11, 0x28, 0x00, 0xDD, 0xCC, 0xBB, 0xAA,
+        ])
+        .expect("load act should parse");
+
+        assert_eq!(
+            message,
+            ServerMessage::LoadAct {
+                act: 1,
+                map_id: 0x1122_3344,
+                area_id: 0x0028,
+                automap: 0xAABB_CCDD,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_player_move_reads_target_and_current_coordinates() {
+        let message = ServerMessage::parse(&[
+            0x0F, 0x00, 0x78, 0x56, 0x34, 0x12, 0x17, 0x40, 0x1F, 0x41, 0x1F, 0x02, 0x38, 0x1F,
+            0x39, 0x1F,
+        ])
+        .expect("player move should parse");
+
+        assert_eq!(
+            message,
+            ServerMessage::PlayerMove {
+                unit_type: 0,
+                unit_id: 0x1234_5678,
+                move_type: 0x17,
+                target_x: 8000,
+                target_y: 8001,
+                unit_hit_class: 2,
+                current_x: 7992,
+                current_y: 7993,
+            }
+        );
+    }
+
+    #[test]
+    fn decoded_plain_packet_can_be_parsed_as_assign_player() {
+        let mut reader = D2GSReader::new();
+        let mut packet = vec![0x59, 0x04, 0x03, 0x02, 0x01, 0x03];
+        packet.extend_from_slice(b"Rusty\0\0\0\0\0\0\0\0\0\0\0");
+        packet.extend_from_slice(&1234u16.to_le_bytes());
+        packet.extend_from_slice(&5678u16.to_le_bytes());
+
+        reader.read(&packet);
+        let decoded = reader.next().expect("plain D2GS packet should be queued");
+        let message = ServerMessage::try_from(&decoded).expect("assign player should parse");
+
+        assert_eq!(
+            message,
+            ServerMessage::AssignPlayer {
+                unit_id: 0x0102_0304,
+                class: 3,
+                szname: *b"Rusty\0\0\0\0\0\0\0\0\0\0\0",
+                x: 1234,
+                y: 5678,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_rejects_truncated_fixed_length_packet() {
+        let error = ServerMessage::parse(&[0x0F, 0x00]).expect_err("packet is truncated");
+
+        assert_eq!(
+            error,
+            ServerMessageParseError::UnexpectedLength {
+                packet_id: 0x0F,
+                expected: 16,
+                actual: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_rejects_unsupported_packet_id() {
+        let error = ServerMessage::parse(&[0xB1]).expect_err("packet parser is not complete yet");
+
+        assert_eq!(error, ServerMessageParseError::UnsupportedPacketId(0xB1));
+    }
+
+    #[test]
+    fn parse_rejects_empty_input() {
+        let error = ServerMessage::parse(&[]).expect_err("empty packet cannot be parsed");
+
+        assert_eq!(error, ServerMessageParseError::EmptyPacket);
+    }
 }
