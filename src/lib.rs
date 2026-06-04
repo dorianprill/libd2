@@ -20,18 +20,26 @@ pub use crate::core::inventory::{
     GridSize, InventoryProfile, ItemParent, ItemPosition, StoredItemContainer,
 };
 pub use crate::core::map::{
-    act_from_level_id, expand_rle_row, is_good_exit, is_valid_map_seed, rle_row_is_blocked,
-    CollisionFlag, CollisionGrid, GeneratedMap, MapObject, MapObjectKind, MapPoint, MapSeed,
-    MapSize,
+    act_for_area, act_from_level_id, expand_rle_row, is_good_exit, is_valid_map_seed,
+    rle_row_is_blocked, CollisionFlag, CollisionGrid, GeneratedMap, GeneratedMapJsonError,
+    MapGenerationError, MapGenerationRequest, MapGenerationRequestError, MapObject, MapObjectKind,
+    MapPoint, MapSeed, MapSize,
 };
 pub use crate::core::mpq::{
     decrypt_mpq_block, decrypt_mpq_block_range, encryption_table, mpq_decryption_key, mpq_hash,
     MpqBlockEntry, MpqCompressionType, MpqError, MpqFileFlags, MpqFormatVersion, MpqHashEntry,
     MpqHashType, MpqHeader,
 };
-pub use crate::core::object::item::{Item, ItemBufferCoord, ItemBufferId};
+pub use crate::core::network::connection::{Connection, ConnectionEvent};
+pub use crate::core::network::d2gs::D2GSPacket;
+pub use crate::core::object::item::{
+    Item, ItemAction, ItemAffixPair, ItemBufferCoord, ItemBufferId, ItemCategory, ItemCode,
+    ItemContainer, ItemDestination, ItemDurability, ItemFlags, ItemOwner, ItemPacketData,
+    ItemPlacement, ItemQuality, ItemRuneword,
+};
 pub use crate::core::object::WorldObject;
 pub use crate::core::party::PartyAction;
+pub use crate::core::protocol::server_message::ServerMessageParseError;
 pub use crate::core::protocol::ClientMessage;
 pub use crate::core::protocol::ServerMessage;
 pub use crate::core::unit_stat::UnitStat;

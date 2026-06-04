@@ -4,10 +4,11 @@ pub trait AsBytes {
     fn as_bytes(&self) -> &[u8];
 }
 
-#[allow(dead_code)]
 /// A D2GSPacket is a network packet received on the correct port (4000 is for game server packets) and
 /// has been successfully decompressed (if sent compressed).
 /// Although it is a simple wrapper around Vec<> it specifically indicates validity/consumability
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct D2GSPacket {
     pub data: Vec<u8>,
 }

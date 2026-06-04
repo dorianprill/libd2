@@ -47,10 +47,10 @@ impl D2GSReader {
     /// message size can be transmitted in either one u8 or two u8 as
     /// depdending on whether the first byte is >= 0xF0
     /// Message Layout:
-    /// if byte[0] < 0xF0:
+    /// if `byte[0] < 0xF0`:
     /// 	(UINT8) Message Size
     /// 	(VOID) Message Data
-    /// if byte[0] >= 0xF0:
+    /// if `byte[0] >= 0xF0`:
     /// 	(UINT8) High Message Size
     /// 	(UINT8) Low Message Size
     /// 	(VOID) Message Data
@@ -194,6 +194,12 @@ pub fn get_packet_size(input: &[u8], result: &mut i32) -> bool {
         0xAE => {
             if size >= 3 {
                 *result = (3 + ((input[1] as i32) << 8)) & input[2] as i32;
+                return true;
+            }
+        }
+        0x3E => {
+            if size >= 2 {
+                *result = input[1] as i32;
                 return true;
             }
         }

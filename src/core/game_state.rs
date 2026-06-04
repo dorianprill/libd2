@@ -160,6 +160,10 @@ impl GameState {
         &self.items
     }
 
+    pub fn item(&self, id: u32) -> Option<&Item> {
+        self.items.get(&id)
+    }
+
     pub fn map(&self) -> &GameMapState {
         &self.map
     }
@@ -533,6 +537,36 @@ impl Update for GameState {
                 );
                 true
             }
+            ServerMessage::ItemActionWorld {
+                action,
+                category,
+                item_id,
+                bitstream,
+                ..
+            } => {
+                self.items.insert(
+                    item_id,
+                    Item::from_world_packet(item_id, action, category, bitstream),
+                );
+                true
+            }
+            ServerMessage::ItemActionOwned {
+                action,
+                category,
+                item_id,
+                owner_type,
+                owner_id,
+                bitstream,
+                ..
+            } => {
+                self.items.insert(
+                    item_id,
+                    Item::from_owned_packet(
+                        item_id, action, category, owner_type, owner_id, bitstream,
+                    ),
+                );
+                true
+            }
             ServerMessage::AddExpU8 { amount } => self.add_local_experience(amount as u32),
             ServerMessage::AddExpU16 { amount } => self.add_local_experience(amount as u32),
             ServerMessage::AddExpU32 { amount } => {
@@ -571,7 +605,10 @@ mod tests {
     use crate::core::network::d2gs::D2GSPacket;
     use crate::core::unit_stat::UnitStat;
     use crate::core::update::Update;
-    use crate::{CharacterClass, Difficulty, GameState, ServerMessage};
+    use crate::{
+        CharacterClass, Difficulty, GameState, ItemDestination, ItemOwner, ItemPlacement,
+        ServerMessage,
+    };
 
     #[test]
     fn game_flags_update_difficulty_and_mode_flags() {
@@ -740,6 +777,82 @@ mod tests {
     }
 
     #[test]
+    fn item_action_packets_update_item_owner_and_placement() {
+        let mut state = GameState::default();
+        let ground_bits = item_bitstream(
+            0,
+            0x60,
+            ItemDestination::Ground,
+            ItemPlacement::Ground { x: 123, y: 456 },
+        );
+
+        assert!(state.update(ServerMessage::ItemActionWorld {
+            action: 0x01,
+            packet_size: (8 + ground_bits.len()) as u8,
+            category: 0x04,
+            item_id: 0x1122_3344,
+            bitstream: ground_bits,
+        }));
+
+        let item = state.item(0x1122_3344).expect("item exists");
+        assert_eq!(item.owner(), ItemOwner::World);
+        assert_eq!(
+            item.packet_data()
+                .expect("item prefix should parse")
+                .placement,
+            ItemPlacement::Ground { x: 123, y: 456 }
+        );
+
+        let container_bits = item_bitstream(
+            0,
+            0x60,
+            ItemDestination::Cursor,
+            ItemPlacement::Container {
+                equipment_location: 0,
+                x: 2,
+                y: 3,
+                container: 1,
+            },
+        );
+
+        assert!(state.update(ServerMessage::ItemActionOwned {
+            action: 0x02,
+            packet_size: (13 + container_bits.len()) as u8,
+            category: 0x05,
+            item_id: 0x1122_3344,
+            owner_type: 0,
+            owner_id: 0x0102_0304,
+            bitstream: container_bits,
+        }));
+
+        let item = state.item(0x1122_3344).expect("item still exists");
+        assert_eq!(
+            item.owner(),
+            ItemOwner::Unit {
+                unit_type: 0,
+                unit_id: 0x0102_0304,
+            }
+        );
+        assert_eq!(
+            item.packet_data()
+                .expect("item prefix should parse")
+                .placement,
+            ItemPlacement::Container {
+                equipment_location: 0,
+                x: 2,
+                y: 3,
+                container: 1,
+            }
+        );
+
+        assert!(state.update(ServerMessage::RemoveObject {
+            unit_type: 0x04,
+            unit_id: 0x1122_3344,
+        }));
+        assert!(state.item(0x1122_3344).is_none());
+    }
+
+    #[test]
     fn npc_zero_life_removes_npc_memory() {
         let mut state = GameState::default();
         state.update(ServerMessage::MonsterAssign {
@@ -783,5 +896,59 @@ mod tests {
         let player = state.player(7).expect("player exists");
         assert_eq!(player.stat(UnitStat::Strength as u16), Some(50));
         assert_eq!(player.stat(UnitStat::Experience as u16), Some(1000));
+    }
+
+    fn item_bitstream(
+        flags: u32,
+        version: u8,
+        destination: ItemDestination,
+        placement: ItemPlacement,
+    ) -> Vec<u8> {
+        let mut writer = TestBitWriter::default();
+        writer.write_bits(flags, 32);
+        writer.write_bits(version as u32, 8);
+        writer.write_bits(0, 2);
+        writer.write_bits(destination.packet_value() as u32, 3);
+        match placement {
+            ItemPlacement::Ground { x, y } => {
+                writer.write_bits(x as u32, 16);
+                writer.write_bits(y as u32, 16);
+            }
+            ItemPlacement::Container {
+                equipment_location,
+                x,
+                y,
+                container,
+            } => {
+                writer.write_bits(equipment_location as u32, 4);
+                writer.write_bits(x as u32, 4);
+                writer.write_bits(y as u32, 3);
+                writer.write_bits(container as u32, 4);
+            }
+        }
+        writer.finish()
+    }
+
+    #[derive(Default)]
+    struct TestBitWriter {
+        bytes: Vec<u8>,
+        bit_offset: usize,
+    }
+
+    impl TestBitWriter {
+        fn write_bits(&mut self, value: u32, count: usize) {
+            for index in 0..count {
+                if self.bit_offset / 8 == self.bytes.len() {
+                    self.bytes.push(0);
+                }
+                let bit = ((value >> index) & 1) as u8;
+                self.bytes[self.bit_offset / 8] |= bit << (self.bit_offset % 8);
+                self.bit_offset += 1;
+            }
+        }
+
+        fn finish(self) -> Vec<u8> {
+            self.bytes
+        }
     }
 }

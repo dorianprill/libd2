@@ -25,7 +25,70 @@ use std::str;
 //use std::collections::BinaryHeap;
 //use connection::raw_packet::RawPacket;
 use crate::core::game_state::GameState;
-use crate::core::network::d2gs::D2GSReader;
+use crate::core::network::d2gs::{D2GSPacket, D2GSReader};
+use crate::core::protocol::server_message::ServerMessageParseError;
+use crate::core::protocol::ServerMessage;
+use crate::core::update::Update;
+
+const LEGACY_D2GS_PORT: u16 = 4000;
+const D2R_BNET_PORT: u16 = 1119;
+
+/// Transport classification for captured Diablo II traffic.
+///
+/// Classic/LoD D2GS traffic on port 4000 uses the legacy plaintext game-server
+/// framing handled by [`D2GSReader`]. D2R/modern Battle.net traffic observed on
+/// port 1119 is a protected Battle.net transport, not raw D2GS framing, so it
+/// must not be passed to the legacy reader unless a future caller supplies
+/// already-decoded plaintext fixtures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CapturedTransport {
+    LegacyD2gs,
+    D2rEncryptedOrUnknown,
+    Ignored,
+}
+
+fn classify_transport(source_port: u16, destination_port: u16) -> CapturedTransport {
+    if source_port == LEGACY_D2GS_PORT || destination_port == LEGACY_D2GS_PORT {
+        CapturedTransport::LegacyD2gs
+    } else if source_port == D2R_BNET_PORT || destination_port == D2R_BNET_PORT {
+        CapturedTransport::D2rEncryptedOrUnknown
+    } else {
+        CapturedTransport::Ignored
+    }
+}
+
+/// Event emitted by [`Connection`] when a legacy D2GS payload produces a packet.
+///
+/// Overlay and visualization tools should treat this as the non-blocking bridge
+/// out of packet capture: run `Connection::listen_with_events` or
+/// `Client::start_with_events` on a worker thread, then forward these events or
+/// small `GameState` snapshots to the UI thread. Parse errors are emitted rather
+/// than silently swallowed so callers can track missing packet coverage while
+/// still keeping the capture loop alive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectionEvent {
+    ServerMessage {
+        packet: D2GSPacket,
+        message: ServerMessage,
+        applied: bool,
+    },
+    ParseError {
+        packet: D2GSPacket,
+        error: ServerMessageParseError,
+    },
+}
+
+impl ConnectionEvent {
+    pub fn packet(&self) -> &D2GSPacket {
+        match self {
+            Self::ServerMessage { packet, .. } | Self::ParseError { packet, .. } => packet,
+        }
+    }
+
+    pub fn packet_id(&self) -> u8 {
+        self.packet().packet_id()
+    }
+}
 
 // There are three different connections involved:
 // BNCS: the battle.net chat server
@@ -35,8 +98,8 @@ use crate::core::network::d2gs::D2GSReader;
 //     6120 UDP for D2R (PC)
 // D2GS:  The diablo2 game server protocol
 //   Ports:
-//     4000 TCP for D2Vanilla
-//     1119 TCP for D2R (PC)
+//     4000 TCP for legacy Classic/LoD plaintext D2GS
+//     1119 TCP for D2R/modern Battle.net transport; not legacy D2GS framing
 
 pub struct Connection {
     interface: NetworkInterface,
@@ -103,6 +166,19 @@ impl Connection {
     // add_packet allows external modules to add packages for injecting
     //pub fn add_packet() -> bool {}
     pub fn listen(&mut self, game_state: &mut GameState) {
+        self.listen_with_events(game_state, |_, _| {});
+    }
+
+    /// Starts the blocking packet-capture loop and emits decoded D2GS events.
+    ///
+    /// This method is still blocking because libpnet's receiver waits for the
+    /// next frame. UI applications should call it from a worker thread. The
+    /// callback receives each parsed/failed packet plus the current game state
+    /// after a successfully parsed message has been applied.
+    pub fn listen_with_events<F>(&mut self, game_state: &mut GameState, mut on_event: F)
+    where
+        F: FnMut(ConnectionEvent, &GameState),
+    {
         use self::pnet::datalink::Channel::Ethernet;
         let interface = self.interface.clone();
         if !self.initialized {
@@ -142,12 +218,14 @@ impl Connection {
                             &interface,
                             &fake_ethernet_frame.to_immutable(),
                             game_state,
+                            &mut on_event,
                         );
                     }
                     self.handle_ethernet_frame(
                         &interface,
                         &EthernetPacket::new(packet).unwrap(),
                         game_state,
+                        &mut on_event,
                     );
                 }
                 Err(e) => panic!("unable to receive packet: {}", e),
@@ -155,13 +233,16 @@ impl Connection {
         }
     }
 
-    fn handle_udp_packet(
+    fn handle_udp_packet<F>(
         &mut self,
         _source: IpAddr,
         _destination: IpAddr,
         packet: &[u8],
         game_state: &mut GameState,
-    ) {
+        on_event: &mut F,
+    ) where
+        F: FnMut(ConnectionEvent, &GameState),
+    {
         let udp = UdpPacket::new(packet);
 
         if let Some(udp) = udp {
@@ -169,12 +250,11 @@ impl Connection {
             //if !PORTS.contains(&udp.get_destination()) && !PORTS.contains(&udp.get_source()) {
             //    return
             //}
-            match udp.get_destination() {
-                // game packet
-                1119 | 4000 => self.read_d2gs_payload(udp.payload(), game_state),
-                // bncs/realm packet -> not implemented yet
-                //6112 | 6120 => println!("Received unhandled BNCS or Realm packet"),
-                _ => {}
+            match classify_transport(udp.get_source(), udp.get_destination()) {
+                CapturedTransport::LegacyD2gs => {
+                    self.read_d2gs_payload(udp.payload(), game_state, on_event)
+                }
+                CapturedTransport::D2rEncryptedOrUnknown | CapturedTransport::Ignored => {}
             }
             // println!(
             //         "UDP {}:{} > {}:{}  len={:03}  {:x?}  {:?}",
@@ -191,25 +271,27 @@ impl Connection {
         }
     }
 
-    fn handle_tcp_packet(
+    fn handle_tcp_packet<F>(
         &mut self,
         _source: IpAddr,
         _destination: IpAddr,
         packet: &[u8],
         game_state: &mut GameState,
-    ) {
+        on_event: &mut F,
+    ) where
+        F: FnMut(ConnectionEvent, &GameState),
+    {
         let tcp = TcpPacket::new(packet);
         if let Some(tcp) = tcp {
             // filter packet by ports used by d2, will continue for both sent & received
             //if !PORTS.contains(&tcp.get_destination()) {//&& !PORTS.contains(&tcp.get_source()) {
             //    return
             //}
-            match tcp.get_destination() {
-                // game packet
-                1119 | 4000 => self.read_d2gs_payload(tcp.payload(), game_state),
-                // bncs/realm packet -> not implemented yet
-                //6112 | 6120 => println!("Received unhandled BNCS or Realm packet"),
-                _ => {}
+            match classify_transport(tcp.get_source(), tcp.get_destination()) {
+                CapturedTransport::LegacyD2gs => {
+                    self.read_d2gs_payload(tcp.payload(), game_state, on_event)
+                }
+                CapturedTransport::D2rEncryptedOrUnknown | CapturedTransport::Ignored => {}
             }
             // println!(
             //     "TCP {}:{} > {}:{}  len={:03}  {:x?}  {:?}",
@@ -226,7 +308,7 @@ impl Connection {
         }
     }
 
-    fn handle_transport_protocol(
+    fn handle_transport_protocol<F>(
         &mut self,
         _interface_name: &str,
         source: IpAddr,
@@ -234,24 +316,30 @@ impl Connection {
         protocol: IpNextHeaderProtocol,
         packet: &[u8],
         game_state: &mut GameState,
-    ) {
+        on_event: &mut F,
+    ) where
+        F: FnMut(ConnectionEvent, &GameState),
+    {
         match protocol {
             IpNextHeaderProtocols::Udp => {
-                self.handle_udp_packet(source, destination, packet, game_state)
+                self.handle_udp_packet(source, destination, packet, game_state, on_event)
             }
             IpNextHeaderProtocols::Tcp => {
-                self.handle_tcp_packet(source, destination, packet, game_state)
+                self.handle_tcp_packet(source, destination, packet, game_state, on_event)
             }
             _ => (),
         }
     }
 
-    fn handle_ipv4_packet(
+    fn handle_ipv4_packet<F>(
         &mut self,
         interface_name: &str,
         ethernet: &EthernetPacket,
         game_state: &mut GameState,
-    ) {
+        on_event: &mut F,
+    ) where
+        F: FnMut(ConnectionEvent, &GameState),
+    {
         let header = Ipv4Packet::new(ethernet.payload());
         if let Some(header) = header {
             self.handle_transport_protocol(
@@ -261,18 +349,22 @@ impl Connection {
                 header.get_next_level_protocol(),
                 header.payload(),
                 game_state,
+                on_event,
             );
         } else {
             println!("[{}]: Malformed IPv4 Packet", interface_name);
         }
     }
 
-    fn handle_ipv6_packet(
+    fn handle_ipv6_packet<F>(
         &mut self,
         interface_name: &str,
         ethernet: &EthernetPacket,
         game_state: &mut GameState,
-    ) {
+        on_event: &mut F,
+    ) where
+        F: FnMut(ConnectionEvent, &GameState),
+    {
         let header = Ipv6Packet::new(ethernet.payload());
         if let Some(header) = header {
             self.handle_transport_protocol(
@@ -282,22 +374,30 @@ impl Connection {
                 header.get_next_header(),
                 header.payload(),
                 game_state,
+                on_event,
             );
         } else {
             println!("[{}]: Malformed IPv6 Packet", interface_name);
         }
     }
 
-    fn handle_ethernet_frame(
+    fn handle_ethernet_frame<F>(
         &mut self,
         interface: &NetworkInterface,
         ethernet: &EthernetPacket,
         game_state: &mut GameState,
-    ) {
+        on_event: &mut F,
+    ) where
+        F: FnMut(ConnectionEvent, &GameState),
+    {
         let interface_name = &interface.name[..];
         match ethernet.get_ethertype() {
-            EtherTypes::Ipv4 => self.handle_ipv4_packet(interface_name, ethernet, game_state),
-            EtherTypes::Ipv6 => self.handle_ipv6_packet(interface_name, ethernet, game_state),
+            EtherTypes::Ipv4 => {
+                self.handle_ipv4_packet(interface_name, ethernet, game_state, on_event)
+            }
+            EtherTypes::Ipv6 => {
+                self.handle_ipv6_packet(interface_name, ethernet, game_state, on_event)
+            }
             _ => (), // TODO make debug only print
                      // println!(
                      // "[{}]: Unknown packet: {} > {}; ethertype: {:?} length: {}",
@@ -310,10 +410,143 @@ impl Connection {
         }
     }
 
-    fn read_d2gs_payload(&mut self, payload: &[u8], game_state: &mut GameState) {
+    /// Processes a legacy D2GS payload without using live packet capture.
+    ///
+    /// This is intended for fixture replay, tests, and callers that receive raw
+    /// D2GS payload bytes from some other source. For live sniffing, use
+    /// [`Connection::listen_with_events`].
+    pub fn process_d2gs_payload(
+        &mut self,
+        payload: &[u8],
+        game_state: &mut GameState,
+    ) -> Vec<ConnectionEvent> {
+        let mut events = Vec::new();
+        self.process_d2gs_payload_with_events(payload, game_state, |event, _| {
+            events.push(event);
+        });
+        events
+    }
+
+    /// Processes a legacy D2GS payload and calls `on_event` for each decoded
+    /// packet.
+    pub fn process_d2gs_payload_with_events<F>(
+        &mut self,
+        payload: &[u8],
+        game_state: &mut GameState,
+        mut on_event: F,
+    ) where
+        F: FnMut(ConnectionEvent, &GameState),
+    {
+        self.read_d2gs_payload(payload, game_state, &mut on_event);
+    }
+
+    fn read_d2gs_payload<F>(&mut self, payload: &[u8], game_state: &mut GameState, on_event: &mut F)
+    where
+        F: FnMut(ConnectionEvent, &GameState),
+    {
         self.d2gs_reader.read(payload);
         while let Some(packet) = self.d2gs_reader.next() {
-            let _ = game_state.apply_packet(&packet);
+            match ServerMessage::try_from(&packet) {
+                Ok(message) => {
+                    let applied = game_state.update(message.clone());
+                    on_event(
+                        ConnectionEvent::ServerMessage {
+                            packet,
+                            message,
+                            applied,
+                        },
+                        game_state,
+                    );
+                }
+                Err(error) => {
+                    on_event(ConnectionEvent::ParseError { packet, error }, game_state);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        classify_transport, CapturedTransport, Connection, ConnectionEvent, D2R_BNET_PORT,
+        LEGACY_D2GS_PORT,
+    };
+    use crate::core::game_state::GameState;
+    use crate::core::protocol::server_message::ServerMessageParseError;
+    use crate::ServerMessage;
+
+    #[test]
+    fn classifies_legacy_d2gs_by_source_or_destination_port() {
+        assert_eq!(
+            classify_transport(LEGACY_D2GS_PORT, 51_000),
+            CapturedTransport::LegacyD2gs
+        );
+        assert_eq!(
+            classify_transport(51_000, LEGACY_D2GS_PORT),
+            CapturedTransport::LegacyD2gs
+        );
+    }
+
+    #[test]
+    fn classifies_d2r_battle_net_transport_without_d2gs_parsing() {
+        assert_eq!(
+            classify_transport(D2R_BNET_PORT, 51_000),
+            CapturedTransport::D2rEncryptedOrUnknown
+        );
+        assert_eq!(
+            classify_transport(51_000, D2R_BNET_PORT),
+            CapturedTransport::D2rEncryptedOrUnknown
+        );
+    }
+
+    #[test]
+    fn ignores_unrelated_ports() {
+        assert_eq!(classify_transport(443, 51_000), CapturedTransport::Ignored);
+    }
+
+    #[test]
+    fn process_d2gs_payload_emits_event_and_updates_state() {
+        let mut connection = Connection::new();
+        let mut state = GameState::default();
+        let mut packet = vec![0x59, 0x04, 0x03, 0x02, 0x01, 0x03];
+        packet.extend_from_slice(b"Rusty\0\0\0\0\0\0\0\0\0\0\0");
+        packet.extend_from_slice(&1234u16.to_le_bytes());
+        packet.extend_from_slice(&5678u16.to_le_bytes());
+
+        let events = connection.process_d2gs_payload(&packet, &mut state);
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(state.local_player_id(), Some(0x0102_0304));
+        match &events[0] {
+            ConnectionEvent::ServerMessage {
+                packet,
+                message: ServerMessage::AssignPlayer { unit_id, x, y, .. },
+                applied,
+            } => {
+                assert_eq!(packet.packet_id(), 0x59);
+                assert_eq!(*unit_id, 0x0102_0304);
+                assert_eq!((*x, *y), (1234, 5678));
+                assert!(*applied);
+            }
+            other => panic!("unexpected connection event: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn process_d2gs_payload_reports_parse_errors() {
+        let mut connection = Connection::new();
+        let mut state = GameState::default();
+
+        let events = connection.process_d2gs_payload(&[0xB1, 0x00], &mut state);
+
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            ConnectionEvent::ParseError { packet, error } => {
+                assert_eq!(packet.packet_id(), 0xB1);
+                assert_eq!(error, &ServerMessageParseError::UnsupportedPacketId(0xB1));
+            }
+            other => panic!("unexpected connection event: {:?}", other),
         }
     }
 }

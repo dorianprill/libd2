@@ -308,10 +308,15 @@ pub enum ServerMessage {
     Unused18 = 0x3C,
     Unused19 = 0x3D,
 
-    // TODO UpdateItemStats according to bh:
-    //{ "BYTE" : "nFullPacketSize" },
-    //{ "BYTE" : "StatBitStream[nFullPacketSize - 2]" }
-    UpdateItemStats = 0x3E,
+    /// Variable-length item stat update.
+    ///
+    /// This packet carries an item-stat bitstream, but the stable packet
+    /// envelope does not expose the item id directly. Full interpretation is
+    /// deferred until the item-stat bitstream parser exists.
+    UpdateItemStats {
+        packet_size: u8,
+        bitstream: Vec<u8>,
+    } = 0x3E,
 
     UseStackableItem {
         spell_icon: u8,
@@ -456,7 +461,7 @@ pub enum ServerMessage {
 
     /// Conflicting info:
     /// Uknown28 {
-    ///     unknown: [u8;13]
+    ///     unknown: `[u8; 13]`
     /// } = 0x58,
     /// BH variant chosen for now
     OpenUI {
@@ -874,15 +879,22 @@ pub enum ServerMessage {
         unused: u16,
     } = 0x9B,
 
-    /// TODO figure out the count differences
+    /// World item action (`D2GS_ITEM_WORLD`).
+    ///
+    /// The bitstream begins with item flags, item-data version, destination,
+    /// and placement fields before continuing into quality/stat data.
     ItemActionWorld {
         action: u8,
         packet_size: u8,
         category: u8,
         item_id: u32,
-        bitstream: [u8; 249], // { "BYTE" : "BitStream[PacketSize - 8]" } FIXME maximum packet size?
+        bitstream: Vec<u8>,
     } = 0x9C,
 
+    /// Owned item action (`D2GS_ITEM_OWNED`).
+    ///
+    /// This shares the world-item payload shape and adds the owning unit type
+    /// and id before the item bitstream.
     ItemActionOwned {
         action: u8,
         packet_size: u8,
@@ -890,7 +902,7 @@ pub enum ServerMessage {
         item_id: u32,
         owner_type: u8,
         owner_id: u32,
-        bitstream: [u8; 243], // { "BYTE" : "BitStream[nFullPacketSize - 13]" }
+        bitstream: Vec<u8>,
     } = 0x9D,
 
     MercAttributeU8 {
@@ -1276,6 +1288,21 @@ impl ServerMessage {
                     amount: cursor.u32_le(),
                 })
             }
+            0x3E => {
+                let mut cursor = PacketCursor::new_variable(input, 2, 1)?;
+                let packet_size = cursor.u8();
+                if packet_size as usize != input.len() {
+                    return Err(ServerMessageParseError::UnexpectedLength {
+                        packet_id,
+                        expected: packet_size as usize,
+                        actual: input.len(),
+                    });
+                }
+                Ok(Self::UpdateItemStats {
+                    packet_size,
+                    bitstream: cursor.remaining().to_vec(),
+                })
+            }
             0x51 => {
                 let mut cursor = PacketCursor::new(input, 14)?;
                 Ok(Self::WorldObject {
@@ -1391,6 +1418,46 @@ impl ServerMessage {
                     x: cursor.u16_le(),
                     y: cursor.u16_le(),
                     unit_life: cursor.u8(),
+                })
+            }
+            0x9C => {
+                let mut cursor = PacketCursor::new_variable(input, 8, 2)?;
+                let action = cursor.u8();
+                let packet_size = cursor.u8();
+                if packet_size as usize != input.len() {
+                    return Err(ServerMessageParseError::UnexpectedLength {
+                        packet_id,
+                        expected: packet_size as usize,
+                        actual: input.len(),
+                    });
+                }
+                Ok(Self::ItemActionWorld {
+                    action,
+                    packet_size,
+                    category: cursor.u8(),
+                    item_id: cursor.u32_le(),
+                    bitstream: cursor.remaining().to_vec(),
+                })
+            }
+            0x9D => {
+                let mut cursor = PacketCursor::new_variable(input, 13, 2)?;
+                let action = cursor.u8();
+                let packet_size = cursor.u8();
+                if packet_size as usize != input.len() {
+                    return Err(ServerMessageParseError::UnexpectedLength {
+                        packet_id,
+                        expected: packet_size as usize,
+                        actual: input.len(),
+                    });
+                }
+                Ok(Self::ItemActionOwned {
+                    action,
+                    packet_size,
+                    category: cursor.u8(),
+                    item_id: cursor.u32_le(),
+                    owner_type: cursor.u8(),
+                    owner_id: cursor.u32_le(),
+                    bitstream: cursor.remaining().to_vec(),
                 })
             }
             0xAB => {
@@ -1591,6 +1658,67 @@ mod tests {
                 unit_hit_class: 2,
                 current_x: 7992,
                 current_y: 7993,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_variable_item_packets_preserves_envelopes_and_bitstreams() {
+        let world = ServerMessage::parse(&[
+            0x9C, 0x01, 0x0b, 0x04, 0x44, 0x33, 0x22, 0x11, 0xaa, 0xbb, 0xcc,
+        ])
+        .expect("world item should parse");
+        assert_eq!(
+            world,
+            ServerMessage::ItemActionWorld {
+                action: 0x01,
+                packet_size: 0x0b,
+                category: 0x04,
+                item_id: 0x1122_3344,
+                bitstream: vec![0xaa, 0xbb, 0xcc],
+            }
+        );
+
+        let owned = ServerMessage::parse(&[
+            0x9D, 0x02, 0x0f, 0x05, 0x88, 0x77, 0x66, 0x55, 0x00, 0x04, 0x03, 0x02, 0x01, 0xdd,
+            0xee,
+        ])
+        .expect("owned item should parse");
+        assert_eq!(
+            owned,
+            ServerMessage::ItemActionOwned {
+                action: 0x02,
+                packet_size: 0x0f,
+                category: 0x05,
+                item_id: 0x5566_7788,
+                owner_type: 0x00,
+                owner_id: 0x0102_0304,
+                bitstream: vec![0xdd, 0xee],
+            }
+        );
+
+        let stats = ServerMessage::parse(&[0x3E, 0x05, 0x10, 0x20, 0x30])
+            .expect("item stat update should parse");
+        assert_eq!(
+            stats,
+            ServerMessage::UpdateItemStats {
+                packet_size: 0x05,
+                bitstream: vec![0x10, 0x20, 0x30],
+            }
+        );
+    }
+
+    #[test]
+    fn parse_variable_item_packet_rejects_size_mismatch() {
+        let error = ServerMessage::parse(&[0x9C, 0x01, 0x0c, 0x04, 0, 0, 0, 0, 0xaa])
+            .expect_err("declared packet size is wrong");
+
+        assert_eq!(
+            error,
+            ServerMessageParseError::UnexpectedLength {
+                packet_id: 0x9C,
+                expected: 0x0c,
+                actual: 9,
             }
         );
     }

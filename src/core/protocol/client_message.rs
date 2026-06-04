@@ -459,7 +459,7 @@ pub enum ClientMessage {
 
     /// This message should be used for manipulating the trading window,
     /// the Horadric Cube item window, and the Stash window.
-    /// see https://bnetdocs.org/packet/98/d2gs-trade
+    /// see <https://bnetdocs.org/packet/98/d2gs-trade>
     /// request_id types are found in entity::player::TradeActionId
     Trade {
         request_id: u32,
@@ -538,7 +538,7 @@ pub enum ClientMessage {
     /// Replaces 0x67 D2BS_GAMELOGON when creating
     /// a new Solo Player, Open Battle.net or TCP/IP.
     /// Not used at all on Battle.net. (TODO is this statement true?)
-    /// info taken from https://bnetdocs.org/packet/524/d2gs-gamecreate
+    /// info taken from <https://bnetdocs.org/packet/524/d2gs-gamecreate>
     /// Template, Unknown1, Unknown2 & Unknown3 seem to always be 0.
     /// Game name is empty for Solo Player & TCP/IP.
     /// In Kolbot, sent between "Heartbeat loaded" & "Starting default.dbj"
