@@ -84,7 +84,7 @@ Network interface
 pnet datalink channel
     |
     v
-Connection::listen(&mut GameState)
+Connection::listen_with_events(&mut GameState, callback)
     |
     v
 Ethernet -> IPv4/IPv6 -> TCP/UDP filtering
@@ -93,7 +93,7 @@ Ethernet -> IPv4/IPv6 -> TCP/UDP filtering
 D2GSReader::read(raw payload)
     |
     v
-D2GS chunk framing and Huffman decompression
+D2GS chunk framing and optional Huffman decompression
     |
     v
 D2GSPacket queue
@@ -105,12 +105,16 @@ ServerMessage::parse
 GameState::update(ServerMessage)
     |
     v
-External tools query state or subscribe to derived events
+ConnectionEvent + current GameState callback
+    |
+    v
+External tools forward snapshots/events to UI or storage
 ```
 
 The live path now applies successfully parsed packets to `GameState` during
-capture. Unsupported packet IDs are ignored by the live connection path until
-parsers are implemented for them.
+capture. The event path reports unsupported packet IDs and parse errors as
+`ConnectionEvent::ParseError` so overlay tools can keep running while also
+counting missing packet coverage.
 
 ## Control Flow
 
@@ -125,12 +129,19 @@ Client::start()
         blocks in a packet receive loop
         dispatches Diablo II game-server traffic to D2GSReader
         drains decoded packets and applies parsed messages to GameState
+
+Client::start_with_events(callback)
+    Connection::init()
+    Connection::listen_with_events(&mut GameState, callback)
+        performs the same blocking capture loop
+        calls callback(ConnectionEvent, &GameState) after each decoded packet
 ```
 
-`Client` is currently a blocking facade. Future integration points should avoid
-forcing every consumer into this exact loop. A practical next step is to split
-packet capture, packet decoding, and state application into independently
-testable components.
+`Client` remains a blocking facade, so UI tools should run it on a worker
+thread. `ConnectionEvent` is the current integration point for an overlay: the
+callback can forward parsed packet events or compact snapshots of `GameState` to
+the UI thread. `Connection::process_d2gs_payload` provides the same decode/parse
+state-update path for fixtures and replay without live packet capture.
 
 ## Component Responsibilities
 
@@ -141,18 +152,21 @@ testable components.
 - choose the network interface
 - read Ethernet frames from `pnet`
 - unwrap IPv4/IPv6 and TCP/UDP payloads
-- filter likely D2GS ports, currently `4000` and `1119`
-- pass payload bytes to `D2GSReader`
+- classify likely Diablo II transport ports
+- pass legacy plaintext D2GS payload bytes from port `4000` to `D2GSReader`
+- ignore D2R/modern Battle.net port `1119` for D2GS parsing because it is
+  protected transport, not legacy D2GS framing
 - drain decoded packets and apply successfully parsed packets to `GameState`
+- emit `ConnectionEvent` values for parsed messages and parse errors
 
-This component still couples capture to state application. A future callback or
-stream API should let consumers choose whether they want raw packets, parsed
-messages, state mutation, or all three.
+This component still owns capture, decode, parse, and state mutation together.
+The callback API is enough for a first overlay, while a future stream API can
+split those stages more cleanly.
 
 ### D2GS Framing and Decompression
 
 `D2GSReader` owns conversion from captured game-server payload bytes to
-decompressed `D2GSPacket`s:
+`D2GSPacket`s:
 
 - plain packet detection
 - compressed chunk length parsing
@@ -163,11 +177,46 @@ decompressed `D2GSPacket`s:
 Packets remain queued for callers. `Connection` currently drains that queue and
 applies successfully parsed messages to `GameState`.
 
+The plain-packet path is covered by unit tests. The compressed-packet path has
+chunk parsing and Huffman tables/decoder code, but it still needs captured
+fixture tests and audit before it should be considered reliable input support.
+
 ### Protocol Messages
 
 `ClientMessage` describes known client-to-server packet IDs. `ServerMessage`
-now has an initial binary parser for a fixed-size, state-initialization-oriented
-packet subset.
+now has an initial binary parser for a state-initialization-oriented packet
+subset:
+
+```text
+0x00..0x11,
+0x15,
+0x19..0x20,
+0x3E,
+0x51,
+0x59,
+0x5B,
+0x5C,
+0x67..0x69,
+0x6B..0x6D,
+0x9C,
+0x9D,
+0xAB,
+0xAC
+```
+
+These IDs cover game/load lifecycle packets, map reveal/hide, level warps,
+object removal/handshake, movement/state basics, simple stat and experience
+updates, world objects, player assignment/join/left, NPC movement/state/heal,
+variable-length monster assignment, variable item stat-update envelopes, and
+world/owned item action envelopes.
+
+Item action packet envelopes are parsed by `ServerMessage`, but the item
+bitstream itself is owned by `core::object::item`. That module currently decodes
+the stable packet-time fields that do not require MPQ stat tables: flags,
+version, destination/placement, item code, gold amount, used/open sockets,
+level, quality, graphic/color ids, quality-specific ids, runeword metadata,
+armor defense, and durability. The final item stat lists remain raw until
+`ItemStatCost.txt` and related static data are available.
 
 The intended direction is:
 
@@ -193,7 +242,9 @@ coverage.
 - players by unit id
 - NPCs by unit id
 - world objects by unit id
-- items by unit id
+- items by unit id, including latest owner, raw item action bits, typed
+  action/category/container ids, decoded item code/quality/socket/durability
+  fields, and generic destination/placement fields
 - local player id
 - game type, difficulty, locale, ladder/expansion/hardcore flags
 - active map metadata and revealed map tiles
@@ -202,7 +253,8 @@ It implements the `Update` trait with `&mut self` and mutates state for the
 currently parsed packet subset: game flags, act load/unload, map reveal/hide,
 player assignment/movement/join/left, world object assignment/removal, NPC
 assignment/movement/state/heal/death, and simple local player stat/experience
-updates.
+updates. Item action packets currently upsert item owner and decoded packet-time
+item state.
 
 ### Entities and Objects
 
@@ -320,7 +372,11 @@ The map module now defines the render-independent contract used by generated
 maps:
 
 - `MapSeed` and unsigned seed validation
+- `MapGenerationRequest`, which binds seed, difficulty, act, and area into a
+  validated generator-facing request
 - `GeneratedMap`, `MapObject`, `MapPoint`, and `MapSize`
+- generated-map JSON normalization for both single-level output and wrapped
+  generator responses containing `seed`, `difficulty`, `act`, and `levels`
 - `CollisionGrid` over Blaine's alternating filled/open run-length rows
 - row expansion and point collision queries
 - level-id to act lookup
@@ -336,8 +392,7 @@ Future map work should be separated into:
 - generated static layout
 - dynamic collision overlays from game state
 - pathfinding queries over collision data
-- optional external map-generator integration for classic clients until a
-  native Rust generator exists
+- native Rust generator work for one area family at a time
 
 ## Public API Boundary
 
@@ -368,11 +423,19 @@ behavior and should remain optional.
 ## Known Architectural Gaps
 
 - `ServerMessage::parse` covers a first fixed-size subset plus variable-length
-  NPC assignment and player join packets.
+  NPC assignment, player join, item stat-update envelopes, and item action
+  packets.
+- Compressed D2GS/Huffman decoding still lacks captured fixture validation.
 - `GameState::update` only handles the parsed state-relevant subset so far.
-- `Client::start` blocks and has no callback/stream API.
+- D2R/modern Battle.net port `1119` is intentionally classified as
+  encrypted/unknown and is not decoded as D2GS.
+- Item action state now decodes packet-time item fields, but full item stat-list
+  parsing and resolved item semantics still need game-data table integration.
+- `Client::start` still blocks; UI tools must run it on a worker thread or use
+  fixture/replay helpers outside the UI loop.
 - `Connection` directly owns a `D2GSReader`, which couples capture to decoding.
-- Live capture currently ignores parse errors for unsupported packet IDs.
+- The callback API reports parse errors, but there is not yet a first-class
+  non-blocking iterator/stream abstraction.
 - Parser and state-transition unit tests exist for the initial subset, but
   captured packet fixtures are still needed.
 - Native seed-to-layout map generation and pathfinding are not implemented.

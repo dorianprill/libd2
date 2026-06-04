@@ -1,22 +1,32 @@
 # libd2r Report
 
-Last updated: 2026-06-03
+Last updated: 2026-06-05
 
 ## Current Status
 
 The repository contains an early Rust implementation of a passive Diablo II
-shadow client. Network capture, D2GS payload routing, D2GS packet framing,
-Huffman decompression tables, and large declarative protocol enums are present.
-Game-state mutation, typed packet parsing, map generation, pathfinding, and
-character-file tooling are still future work.
+state reconstruction library. Network capture, legacy D2GS payload routing,
+packet framing, typed server-message parsing for a first subset, `GameState`
+mutation, and callback events are now wired together through the `Client` and
+`Connection` facades. The plain legacy D2GS packet path is covered by tests;
+compressed D2GS/Huffman support has tables and code scaffolding but still needs
+captured fixture tests before it should be treated as production-supported.
+D2R/modern Battle.net port `1119` is classified as encrypted/unknown transport
+and is not routed into the legacy D2GS reader.
+
+The crate also has read-only/static-data foundations: a raw-preserving `.d2s`
+loader/saver with legacy, D2R, and Reign of the Warlock detection paths; MPQ
+header/hash/decrypt primitives; and generated-map/collision data structures.
+Native seed-to-layout map generation, pathfinding, full MPQ extraction, item
+record parsing, and save editing remain future work.
 
 The crate now resolves dependencies and passes:
 
 ```text
-cargo check
+cargo test
 ```
 
-No automated tests are present yet.
+The current suite has 62 unit tests.
 
 ## Work Completed
 
@@ -112,20 +122,50 @@ No automated tests are present yet.
   classification based on Blaine's generator rules.
 - Added map tests for seed range, act lookup, RLE collision decoding, grid
   bounds, and good-exit classification.
+- Added variable-length parsing for server item packets `0x3E`, `0x9C`, and
+  `0x9D`, including D2GS packet-size detection for `0x3E`.
+- Added `ItemOwner`, typed item action/category/container enums, `ItemFlags`,
+  `ItemDestination`, `ItemPlacement`, and `ItemPacketData` for item action
+  bitstreams: flags, item-data version, destination/placement, item code, gold
+  amount, used/open sockets, item level, quality, graphic/color ids,
+  quality-specific ids, runeword metadata, armor defense, and durability where
+  those fields are present.
+- Wired `GameState` item updates for world and owned item action packets,
+  preserving raw item bits for later stat-list parsing.
+- Added item parser fixture tests using captured-style packet bytes and
+  state-transition tests.
+- Added generated-map JSON ingestion for the external generator output contract
+  used by `@diablo2/map`, including generated-map import tests.
+- Added explicit network transport classification so legacy port `4000` is
+  parsed as D2GS while D2R/modern port `1119` is treated as protected transport
+  and ignored by the D2GS reader.
+- Added `MapGenerationRequest` and map-generation normalization errors for the
+  seed/difficulty/act/area boundary. The request API exposes the numeric values
+  expected by external generators and normalizes either a single generated level
+  JSON object or a wrapped `seed`/`difficulty`/`act`/`levels` response into the
+  requested `GeneratedMap`.
+- Added `ConnectionEvent`, `Connection::listen_with_events`,
+  `Connection::process_d2gs_payload`, `Client::start_with_events`, and
+  `Client::process_d2gs_payload`. These APIs let overlay tools run blocking
+  capture on a worker thread and forward parsed packet events or compact
+  `GameState` snapshots to a UI thread.
+- Added fixture-style tests for successful callback/event state mutation,
+  parse-error reporting, and the client facade payload replay path.
 
 ## Current Architecture Summary
 
 The live network runtime path is:
 
 ```text
-Client::start
+Client::start / Client::start_with_events
   -> Connection::init
-  -> Connection::listen(&mut GameState)
+  -> Connection::listen(_with_events)(&mut GameState)
   -> Ethernet/IP/TCP/UDP filtering
   -> D2GSReader::read
   -> D2GSPacket queue
   -> ServerMessage::parse
   -> GameState::update
+  -> optional ConnectionEvent callback
 ```
 
 The character-file path is:
@@ -155,8 +195,15 @@ MPQ bytes
 
 ## Challenges and Risks
 
-- `ServerMessage::parse` covers only a first subset. Item packets, many
-  variable-length packets, and bit-packed packets still need dedicated parsers.
+- `ServerMessage::parse` covers only a first subset. Many variable-length
+  packets and bit-packed packets still need dedicated parsers.
+- D2R/modern live Battle.net traffic is not passive-D2GS-decodable in this
+  crate. Support should come from offline files, static data, generated maps,
+  or already-decoded plaintext fixtures.
+- Item action packet support decodes packet-time fields, but full stat-list
+  interpretation still needs game-data tables such as `ItemStatCost.txt`.
+- The compressed D2GS/Huffman path has implementation scaffolding but lacks
+  captured fixture tests and should be audited before any support claim.
 - `CharacterFile` currently parses the stable header, D2R v105 progression and
   mercenary header fields, character stats, and skills. Quests, waypoints,
   NPC-introduction bytes, item records, detailed iron-golem payloads, detailed
@@ -174,7 +221,8 @@ MPQ bytes
   validation. The current profile is an explicit placeholder, not a final
   compatibility claim.
 - `Connection` currently couples capture, decode, parse, and state application.
-  A future stream/callback boundary should expose each stage independently.
+  The callback API is sufficient for a first overlay, but a future stream
+  boundary should expose each stage independently.
 - Several packets are variable length or bit-packed and need focused parsing
   helpers and fixtures.
 - Live packet capture depends on host networking and privileges; tests should
@@ -191,25 +239,23 @@ MPQ bytes
 
 1. Add captured fixture tests for D2GS framing and Huffman decompression before
    changing decoder behavior further.
-2. Expand `ServerMessage::parse` with item packets and the next state-relevant
-   variable-length packets after checking each layout against multiple
-   resources.
-3. Add state support for missiles, party/relationship data, mercenaries, item
-   ownership/location, and event derivation.
-4. Refactor `Connection` so consumers can subscribe to raw decoded packets,
-   parsed messages, or state updates without being forced into the blocking
-   `Client::start` loop.
-5. Create captured-payload fixtures and broader state-transition tests.
-6. Build read-only MPQ archive extraction on top of `core::mpq`: file/memory
+2. Expand item stat-list interpretation after game-data table loading exists,
+   especially `ItemStatCost.txt` bit widths and parameter rules.
+3. Expand `ServerMessage::parse` with the next state-relevant variable-length
+   packets after checking each layout against multiple resources.
+4. Add state support for missiles, party/relationship data, mercenaries, richer
+   item semantics, and event derivation.
+5. Create a small LoD 1.14 `d2helper` prototype using the callback API, with an
+   egui worker-thread/channel boundary and an automap-style isometric debug
+   renderer over `GameState`.
+6. Create captured-payload fixtures and broader state-transition tests.
+7. Build read-only MPQ archive extraction on top of `core::mpq`: file/memory
    reader abstraction, decrypted hash/block tables, path lookup, sector
    extraction, and uncompressed file support.
-7. Add PKWARE implode decompression for classic Diablo II MPQs, preferably
+8. Add PKWARE implode decompression for classic Diablo II MPQs, preferably
    behind a focused module with fixture tests from Blaine's package.
-8. Add TXT/TBL/bin data integration for resolving monster, object, item, skill,
+9. Add TXT/TBL/bin data integration for resolving monster, object, item, skill,
    and string names from extracted game files.
-9. Add an optional external generated-map ingestion path around `GeneratedMap`
-   for JSON emitted by map generators, keeping render/server/process concerns
-   outside the core crate.
 10. Add pathfinding over `CollisionGrid` plus dynamic overlays from live
    `GameState` units and objects.
 11. Implement `.d2s` quest and waypoint section parsers next; these are
@@ -221,7 +267,9 @@ MPQ bytes
 14. Add scanner-style validation helpers for D2R save invariants: checksum,
    size, stat terminator, item counts, follower count/payload length, and
    Warlock follower payload size.
-15. Keep `ARCHITECTURE.md` and `REPORT.md` updated as each component becomes
+15. Start native map generation with a narrow area family after fixture coverage
+   exists for external generated-map imports.
+16. Keep `ARCHITECTURE.md` and `REPORT.md` updated as each component becomes
    real implementation.
 
 ## Resource Comparison
@@ -281,25 +329,25 @@ MPQ bytes
 ## Verification
 
 ```text
-cargo check
+cargo test
+```
+
+Result: passed. 62 tests.
+
+```text
+cargo fmt --check
 ```
 
 Result: passed.
 
 ```text
-cargo test
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 ```
 
-Result: passed. 40 tests.
+Result: passed.
 
 ```text
-cargo fmt
-```
-
-Result: applied.
-
-```text
-cargo fmt --check
+git diff --check
 ```
 
 Result: passed.

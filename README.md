@@ -15,23 +15,44 @@ An immediate use case is a game helper tool that visualizes the game state in re
 
 ## Feature List
 
-1. network protocol support
-   - [x] D2GS (plain)  
-   - [x] D2GS (compressed)  
-   - [ ] BNCS  (It if is used in D2R at all)
-   - [ ] MCP Realm Logon
-2. Game State Data Structures.  
-   - [ ] Items and Buffers (Ground, Inventory, Stash, Cube, Belt)
-   - [x] Players (WIP)
-   - [ ] Players Quest Progression  
-   - [x] NPCs (WIP)
-   - [ ] Party/Hostile
-   - [ ] Game Quest Progression
-   - [ ] Maps (generate from game seed, take from d2bs)
-   - [ ] Pathing(?)
-3. Client object
-   - [x] shadow client (packet listener w/ game update loop WIP)
-   - [ ] active client / protocol state machine
+This list describes the current code, not the final project goal.
+
+1. Network and protocol support
+   - [x] Passive packet capture through `Client`/`Connection` using `pnet`; legacy Classic/LoD plaintext D2GS traffic on port `4000` is routed to the D2GS reader.
+   - [x] D2R/modern Battle.net traffic on port `1119` is classified as encrypted/unknown transport and is no longer fed into the legacy D2GS parser.
+   - [x] Plain D2GS packets can be queued as `D2GSPacket`, parsed as typed `ServerMessage`s for the supported subset, and applied to `GameState`.
+   - [ ] Compressed D2GS packets have chunk-size handling, a packet-size table, and Huffman decoder scaffolding, but still need captured fixture tests before they should be treated as supported.
+   - [x] Parsed server packet IDs: `0x00..0x11`, `0x15`, `0x19..0x20`, `0x3E`, `0x51`, `0x59`, `0x5B`, `0x5C`, `0x67..0x69`, `0x6B..0x6D`, `0x9C`, `0x9D`, `0xAB`, and `0xAC`.
+   - [ ] Missing high-priority packet parsers include HP/MP/stamina bitstreams (`0x18`, `0x95`, `0x96`), party/relationship packets (`0x75`, `0x7F`, `0x8B..0x8D`), mercenary/summon updates (`0x4E`, `0x81`, `0x9E..0xA2`), chat/event streams, quest streams, and full item stat-list interpretation.
+   - [ ] BNCS and MCP/Realm protocol support are not implemented; `realm_connection` currently contains declarative status/message sketches only.
+2. Runtime game-state reconstruction
+   - [x] Tracks game type, difficulty, locale, expansion/ladder/hardcore flags, local player id, and active act/map metadata.
+   - [x] Tracks players for assignment, join/leave, movement, level, simple local stats, and experience updates.
+   - [x] Tracks NPCs/monsters for assignment, movement/action/attack/stop, state, life percent, heal, and death/removal.
+   - [x] Tracks world objects for assignment and removal.
+   - [x] Tracks map reveal/hide tiles from packets.
+   - [x] Tracks item unit ids, world/unit ownership, raw item action bitstreams, typed action/category/container ids, flags, item-data version, destination/placement, item code, gold amount, used/open sockets, item level, quality, graphic/color ids, quality-specific ids, runeword metadata, armor defense, and durability from `0x9C`/`0x9D` where the packet bitstream contains those fields.
+   - [ ] Full item stat lists, resolved item names/properties, complete ground/inventory/stash/cube/belt semantics, missiles, mercenaries, party/hostility, buffs/states, quests, and derived event notifications are not complete.
+3. Character files and inventory profiles
+   - [x] `.d2s` loading/parsing/saving is raw-preserving and validates magic, file size, and checksum; saving repairs size and checksum.
+   - [x] Recognized save-version values are `0x47` pre-LoD, `0x57` LoD 1.07/1.08, `0x59` Classic 1.08, `0x5c` 1.09, `0x60` legacy 1.10+, and `>=0x61` D2R/modern.
+   - [x] Header layouts are dispatched as legacy, D2R legacy (`0x61..=0x68`), and D2R v105+ (`>=0x69`, decimal 105).
+   - [x] Edition detection covers Classic, Lord of Destruction, Resurrected, and Reign of the Warlock. Classic/LoD are distinguished by the expansion status flag; RotW is detected for D2R-encoded saves with Warlock class id `7`.
+   - [x] Inventory profiles are modeled for Classic (`10x4` inventory, `6x4` stash), LoD (`10x4`, `6x8` stash), D2R (`10x4`, `10x10` personal stash, 3 shared pages), and RotW (`10x4`, `10x8` personal stash, 3 shared pages).
+   - [x] Parsed save sections include header fields, D2R v105 progression and mercenary header fields, bit-packed `gf` character stats, 30-byte `if` skills, and item-related marker metadata for `JM`, `jf`, `kf`, and `lf`.
+   - [ ] Item records, personal/shared stash pages, quests, waypoints, NPC introductions, corpse payloads, detailed Iron Golem payloads, follower payload contents, and semantic save editing are not implemented.
+4. MPQ and static game data
+   - [x] MPQ primitives include header parsing, hash-table/block-table entry parsing, format/compression enums, path hashing, decryption-key derivation, encryption-table generation, and in-place block decryption.
+   - [ ] Full archive lookup/extraction, sector table handling, compression/decompression dispatch, and file fixtures are not implemented.
+   - [ ] TXT/TBL/bin decoders and typed game-data tables are not implemented.
+5. Maps and pathing
+   - [x] Map support currently models generated output: map seeds, validated generator requests for seed/difficulty/act/area, generated-map objects, RLE collision grids, row expansion, point collision queries, level-id-to-act lookup, important-exit classification, and generated-map JSON normalization for single-level and wrapped generator responses.
+   - [ ] Native map generation from seed, MPQ-backed asset loading, and DS1/DT1/excel integration are not implemented.
+   - [ ] Pathfinding over static collision plus dynamic game-state overlays is not implemented.
+6. Client API
+   - [x] Blocking shadow-client facade with packet listener and state update loop.
+   - [x] Callback-oriented capture API via `Client::start_with_events`, `Connection::listen_with_events`, and fixture/replay helpers that emit `ConnectionEvent`s with the current `GameState`.
+   - [ ] Active client/protocol state machine, decoded-packet iterator, and fully non-blocking stream API are not implemented.
 
 ## How to Build
 
@@ -55,8 +76,10 @@ Currently, in order to find the internet-connected network interface, it is nece
 
 ## Usage
 
-One simple use case that is supported now is launching a shadow client to sniff d2gs packets.  
-Put the following code in your main.rs and run it. Then start up your D2 or D2R game client, join a game and watch the game packets flow.
+One simple use case that is supported now is launching a shadow client to sniff
+legacy LoD D2GS packets on port `4000`. Put the following code in your `main.rs`
+and run it. Then start Diablo II LoD 1.14, join a game, and let the library keep
+`GameState` updated from parsed packets.
 
 ```Rust
 use libd2r::Client;
@@ -67,7 +90,29 @@ fn main() {
 }
 ```
 
-Please note that currently it does not fill any internal game data structures (state update handling is still WIP). It will just filter, decode and print packets. Also, make sure to not have multiple game clients running as currently their packages will be indistinguishable in the output.
+For UI tools, run the blocking listener on a worker thread and forward compact
+snapshots or events to the UI thread:
+
+```Rust
+use libd2r::{Client, ConnectionEvent};
+
+fn main() {
+    let mut client = Client::new();
+    client.start_with_events(|event, state| {
+        if let ConnectionEvent::ServerMessage { applied: true, .. } = event {
+            println!(
+                "players={} npcs={} items={}",
+                state.players().len(),
+                state.npcs().len(),
+                state.items().len()
+            );
+        }
+    });
+}
+```
+
+D2R/modern Battle.net traffic on port `1119` is classified as encrypted/unknown
+transport and is not fed into the legacy D2GS parser.
 
 ## Contributing
 
