@@ -224,7 +224,17 @@ fn packet_size_status(input: &[u8]) -> PacketSizeStatus {
         }
         0x3E => {
             if size >= 2 {
-                return positive_size(input[1] as i32);
+                let declared_size = input[1] as usize;
+                if declared_size >= 2
+                    && declared_size <= 34
+                    && input.len() >= 34
+                    && input
+                        .get(declared_size..34)
+                        .is_some_and(|padding| padding.iter().all(|&byte| byte == 0))
+                {
+                    return PacketSizeStatus::Complete(34);
+                }
+                return positive_size(declared_size as i32);
             }
             PacketSizeStatus::NeedMore
         }
@@ -298,6 +308,18 @@ mod tests {
         reader.read(&payload);
 
         assert_eq!(drain_packet_lengths(&mut reader), vec![20, 20]);
+    }
+
+    #[test]
+    fn padded_1_14d_item_stat_packet_is_not_split_at_declared_size() {
+        let mut reader = D2GSReader::new();
+        let mut payload = vec![0x3E, 0x05, 0x10, 0x20, 0x30];
+        payload.resize(34, 0);
+        payload.extend_from_slice(&[0xAF, 0x00]);
+
+        reader.read(&payload);
+
+        assert_eq!(drain_packet_lengths(&mut reader), vec![34, 2]);
     }
 
     #[test]

@@ -3,9 +3,9 @@ use std::collections::{HashMap, HashSet};
 use crate::core::character_class::CharacterClass;
 use crate::core::coordinate::Coordinate;
 use crate::core::entity::npc::Npc;
-use crate::core::entity::player::Player;
+use crate::core::entity::player::{Player, PlayerMovement, PlayerVitals};
 use crate::core::network::d2gs::D2GSPacket;
-use crate::core::object::item::Item;
+use crate::core::object::item::{Item, ItemStateFlags};
 use crate::core::object::WorldObject;
 use crate::core::protocol::server_message::ServerMessageParseError;
 use crate::core::unit_stat::UnitStat;
@@ -93,12 +93,43 @@ impl Default for GameMapState {
     }
 }
 
+/// Raw server item-stat update captured from D2GS packet `0x3E`.
+///
+/// Public packet tables for legacy Diablo II expose `0x3E` as a declared-size
+/// stat bitstream, with 1.14d adding fixed padding out to 34 bytes. They do not
+/// expose a stable item GUID in the packet envelope. Until the item-stat
+/// bitstream itself is decoded with `ItemStatCost` metadata, the library keeps
+/// these events in arrival order instead of guessing which [`Item`] owns them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemStatUpdate {
+    packet_size: u8,
+    bitstream: Vec<u8>,
+}
+
+impl ItemStatUpdate {
+    pub fn new(packet_size: u8, bitstream: Vec<u8>) -> Self {
+        Self {
+            packet_size,
+            bitstream,
+        }
+    }
+
+    pub fn packet_size(&self) -> u8 {
+        self.packet_size
+    }
+
+    pub fn bitstream(&self) -> &[u8] {
+        &self.bitstream
+    }
+}
+
 #[derive(Debug)]
 pub struct GameState {
     pub(crate) players: HashMap<u32, Player>,
     pub(crate) npcs: HashMap<u32, Npc>,
     pub(crate) objects: HashMap<u32, WorldObject>,
     pub(crate) items: HashMap<u32, Item>,
+    pub(crate) item_stat_updates: Vec<ItemStatUpdate>,
     pub(crate) game_type: GameServerType,
     pub(crate) difficulty: Difficulty,
     pub(crate) locale: Locale,
@@ -116,6 +147,7 @@ impl GameState {
             npcs: HashMap::with_capacity(1024),
             objects: HashMap::with_capacity(256),
             items: HashMap::with_capacity(256),
+            item_stat_updates: Vec::with_capacity(64),
             game_type,
             difficulty,
             locale,
@@ -162,6 +194,10 @@ impl GameState {
 
     pub fn item(&self, id: u32) -> Option<&Item> {
         self.items.get(&id)
+    }
+
+    pub fn item_stat_updates(&self) -> &[ItemStatUpdate] {
+        &self.item_stat_updates
     }
 
     pub fn map(&self) -> &GameMapState {
@@ -231,6 +267,28 @@ impl GameState {
         true
     }
 
+    fn set_local_vitals_and_movement(
+        &mut self,
+        vitals: PlayerVitals,
+        movement: PlayerMovement,
+    ) -> bool {
+        let Some(player) = self.local_player_mut() else {
+            return false;
+        };
+        player.set_vitals(vitals);
+        player.set_movement(movement);
+        true
+    }
+
+    fn set_local_stamina_and_movement(&mut self, stamina: u16, movement: PlayerMovement) -> bool {
+        let Some(player) = self.local_player_mut() else {
+            return false;
+        };
+        player.set_stamina(stamina);
+        player.set_movement(movement);
+        true
+    }
+
     fn upsert_player(
         &mut self,
         unit_id: u32,
@@ -289,6 +347,22 @@ impl GameState {
             0x04 => self.items.remove(&unit_id).is_some(),
             _ => false,
         }
+    }
+
+    fn update_object_state(
+        &mut self,
+        unit_id: u32,
+        portal_flags: u8,
+        is_targetable: u8,
+        unit_state: u32,
+    ) -> bool {
+        let Some(object) = self.objects.get_mut(&unit_id) else {
+            return false;
+        };
+        object.set_portal_flags(portal_flags);
+        object.set_targetable(is_targetable);
+        object.set_state(unit_state);
+        true
     }
 }
 
@@ -461,6 +535,13 @@ impl Update for GameState {
             ServerMessage::RemoveObject { unit_type, unit_id } => {
                 self.remove_unit(unit_type, unit_id)
             }
+            ServerMessage::ObjectState {
+                unit_type: _,
+                unit_id,
+                portal_flags,
+                is_targetable,
+                unit_state,
+            } => self.update_object_state(unit_id, portal_flags, is_targetable, unit_state),
             ServerMessage::WorldObject {
                 object_type,
                 object_id,
@@ -477,7 +558,7 @@ impl Update for GameState {
                         object_type,
                         object_class,
                         Coordinate::new(x, y),
-                        state,
+                        state as u32,
                         interaction,
                     ),
                 );
@@ -597,6 +678,46 @@ impl Update for GameState {
                 );
                 true
             }
+            ServerMessage::UpdateItemStats {
+                packet_size,
+                bitstream,
+            } => {
+                self.item_stat_updates
+                    .push(ItemStatUpdate::new(packet_size, bitstream));
+                true
+            }
+            ServerMessage::SetItemState {
+                unit_type,
+                unit_id,
+                item_id,
+                and_value,
+                flags,
+            } => {
+                let state_flags = ItemStateFlags::new(unit_type, unit_id, and_value, flags);
+                self.items
+                    .entry(item_id)
+                    .or_insert_with(|| Item::new(item_id))
+                    .set_state_flags(state_flags);
+                true
+            }
+            ServerMessage::HPMPUPDATE { packed_bits } => {
+                let Some((vitals, movement)) = decode_hpmp_update(&packed_bits) else {
+                    return false;
+                };
+                self.set_local_vitals_and_movement(vitals, movement)
+            }
+            ServerMessage::LifeManaUpdate { bitfield } => {
+                let Some((vitals, movement)) = decode_life_mana_update(&bitfield) else {
+                    return false;
+                };
+                self.set_local_vitals_and_movement(vitals, movement)
+            }
+            ServerMessage::WalkUpdate { bitfield } => {
+                let Some((stamina, movement)) = decode_walk_update(&bitfield) else {
+                    return false;
+                };
+                self.set_local_stamina_and_movement(stamina, movement)
+            }
             ServerMessage::AddExpU8 { amount } => self.add_local_experience(amount as u32),
             ServerMessage::AddExpU16 { amount } => self.add_local_experience(amount as u32),
             ServerMessage::AddExpU32 { amount } => {
@@ -627,6 +748,73 @@ fn fixed_c_string(bytes: &[u8]) -> String {
         .position(|&byte| byte == 0)
         .unwrap_or(bytes.len());
     String::from_utf8_lossy(&bytes[..len]).into_owned()
+}
+
+fn decode_hpmp_update(raw: &[u8; 14]) -> Option<(PlayerVitals, PlayerMovement)> {
+    let mut reader = StatusBitReader::new(raw);
+    let life = reader.bits(15)? as u16;
+    let mana = reader.bits(15)? as u16;
+    let stamina = reader.bits(15)? as u16;
+    let life_regen = reader.bits(7)? as u8;
+    let mana_regen = reader.bits(7)? as u8;
+    let movement = decode_status_movement(&mut reader)?;
+
+    Some((
+        PlayerVitals::new(life, mana, stamina).with_regen(life_regen, mana_regen),
+        movement,
+    ))
+}
+
+fn decode_life_mana_update(raw: &[u8; 12]) -> Option<(PlayerVitals, PlayerMovement)> {
+    let mut reader = StatusBitReader::new(raw);
+    let life = reader.bits(15)? as u16;
+    let mana = reader.bits(15)? as u16;
+    let stamina = reader.bits(15)? as u16;
+    let movement = decode_status_movement(&mut reader)?;
+
+    Some((PlayerVitals::new(life, mana, stamina), movement))
+}
+
+fn decode_walk_update(raw: &[u8; 8]) -> Option<(u16, PlayerMovement)> {
+    let mut reader = StatusBitReader::new(raw);
+    let stamina = reader.bits(15)? as u16;
+    let movement = decode_status_movement(&mut reader)?;
+
+    Some((stamina, movement))
+}
+
+fn decode_status_movement(reader: &mut StatusBitReader<'_>) -> Option<PlayerMovement> {
+    let x = reader.bits(16)? as u16;
+    let y = reader.bits(16)? as u16;
+    let dx = reader.bits(8)? as u8;
+    let dy = reader.bits(8)? as u8;
+    Some(PlayerMovement::new(Coordinate::new(x, y), dx, dy))
+}
+
+struct StatusBitReader<'a> {
+    raw: &'a [u8],
+    bit_offset: usize,
+}
+
+impl<'a> StatusBitReader<'a> {
+    fn new(raw: &'a [u8]) -> Self {
+        Self { raw, bit_offset: 0 }
+    }
+
+    fn bits(&mut self, count: usize) -> Option<u32> {
+        if count > 32 || self.bit_offset.checked_add(count)? > self.raw.len() * 8 {
+            return None;
+        }
+
+        let mut value = 0;
+        for index in 0..count {
+            let position = self.bit_offset + index;
+            let bit = (self.raw[position / 8] >> (position % 8)) & 1;
+            value |= (bit as u32) << index;
+        }
+        self.bit_offset += count;
+        Some(value)
+    }
 }
 
 #[cfg(test)]
@@ -728,6 +916,143 @@ mod tests {
     }
 
     #[test]
+    fn life_mana_update_packets_update_local_vitals_and_position() {
+        let mut state = GameState::default();
+        state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: 1,
+            szname: *b"Sorc\0\0\0\0\0\0\0\0\0\0\0\0",
+            x: 10,
+            y: 20,
+        });
+
+        let bitfield = status_bitfield::<12>(&[
+            (1234, 15),
+            (567, 15),
+            (2500, 15),
+            (101, 16),
+            (202, 16),
+            (9, 8),
+            (10, 8),
+        ]);
+
+        assert!(state.update(ServerMessage::LifeManaUpdate { bitfield }));
+
+        let player = state.player(7).expect("player exists");
+        let vitals = player.vitals().expect("vitals should update");
+        let movement = player.movement().expect("movement should update");
+        assert_eq!(vitals.life(), Some(1234));
+        assert_eq!(vitals.mana(), Some(567));
+        assert_eq!(vitals.stamina(), Some(2500));
+        assert_eq!(vitals.life_regen(), None);
+        assert_eq!(movement.location().x(), 101);
+        assert_eq!(movement.location().y(), 202);
+        assert_eq!(movement.dx(), 9);
+        assert_eq!(movement.dy(), 10);
+        assert_eq!(player.location().x(), 101);
+        assert_eq!(player.location().y(), 202);
+    }
+
+    #[test]
+    fn hpmp_update_packet_records_regen_counters() {
+        let mut state = GameState::default();
+        state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: 4,
+            szname: *b"Barb\0\0\0\0\0\0\0\0\0\0\0\0",
+            x: 10,
+            y: 20,
+        });
+
+        let packed_bits = status_bitfield::<14>(&[
+            (3000, 15),
+            (1200, 15),
+            (1800, 15),
+            (12, 7),
+            (34, 7),
+            (333, 16),
+            (444, 16),
+            (5, 8),
+            (6, 8),
+        ]);
+
+        assert!(state.update(ServerMessage::HPMPUPDATE { packed_bits }));
+
+        let player = state.player(7).expect("player exists");
+        let vitals = player.vitals().expect("vitals should update");
+        assert_eq!(vitals.life(), Some(3000));
+        assert_eq!(vitals.mana(), Some(1200));
+        assert_eq!(vitals.stamina(), Some(1800));
+        assert_eq!(vitals.life_regen(), Some(12));
+        assert_eq!(vitals.mana_regen(), Some(34));
+        assert_eq!(player.location().x(), 333);
+        assert_eq!(player.location().y(), 444);
+    }
+
+    #[test]
+    fn walk_update_refreshes_stamina_and_local_position() {
+        let mut state = GameState::default();
+        state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: 0,
+            szname: *b"Ama\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            x: 10,
+            y: 20,
+        });
+        state.update(ServerMessage::LifeManaUpdate {
+            bitfield: status_bitfield::<12>(&[
+                (900, 15),
+                (300, 15),
+                (700, 15),
+                (10, 16),
+                (20, 16),
+                (0, 8),
+                (0, 8),
+            ]),
+        });
+
+        let bitfield = status_bitfield::<8>(&[(123, 15), (111, 16), (222, 16), (3, 8), (4, 8)]);
+
+        assert!(state.update(ServerMessage::WalkUpdate { bitfield }));
+
+        let player = state.player(7).expect("player exists");
+        let vitals = player.vitals().expect("vitals should update");
+        let movement = player.movement().expect("movement should update");
+        assert_eq!(vitals.life(), Some(900));
+        assert_eq!(vitals.mana(), Some(300));
+        assert_eq!(vitals.stamina(), Some(123));
+        assert_eq!(movement.location().x(), 111);
+        assert_eq!(movement.location().y(), 222);
+        assert_eq!(movement.dx(), 3);
+        assert_eq!(movement.dy(), 4);
+    }
+
+    #[test]
+    fn walk_update_without_prior_life_mana_keeps_unknown_values_unknown() {
+        let mut state = GameState::default();
+        state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: 0,
+            szname: *b"Ama\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            x: 10,
+            y: 20,
+        });
+
+        let bitfield = status_bitfield::<8>(&[(123, 15), (111, 16), (222, 16), (3, 8), (4, 8)]);
+
+        assert!(state.update(ServerMessage::WalkUpdate { bitfield }));
+
+        let vitals = state
+            .player(7)
+            .expect("player exists")
+            .vitals()
+            .expect("stamina should seed vitals");
+        assert_eq!(vitals.life(), None);
+        assert_eq!(vitals.mana(), None);
+        assert_eq!(vitals.stamina(), Some(123));
+    }
+
+    #[test]
     fn world_object_packet_is_tracked_and_removed_by_unit_type() {
         let mut state = GameState::default();
 
@@ -750,6 +1075,33 @@ mod tests {
             unit_id: 99,
         }));
         assert!(state.object(99).is_none());
+    }
+
+    #[test]
+    fn object_state_packet_updates_known_world_object() {
+        let mut state = GameState::default();
+        state.update(ServerMessage::WorldObject {
+            object_type: 2,
+            object_id: 99,
+            object_class: 344,
+            x: 1000,
+            y: 1001,
+            state: 1,
+            interaction: 0,
+        });
+
+        assert!(state.update(ServerMessage::ObjectState {
+            unit_type: 2,
+            unit_id: 99,
+            portal_flags: 0x03,
+            is_targetable: 0x01,
+            unit_state: 0x1122_3344,
+        }));
+
+        let object = state.object(99).expect("object exists");
+        assert_eq!(object.state(), 0x1122_3344);
+        assert_eq!(object.portal_flags(), Some(0x03));
+        assert_eq!(object.is_targetable(), Some(0x01));
     }
 
     #[test]
@@ -924,6 +1276,41 @@ mod tests {
     }
 
     #[test]
+    fn item_stat_update_packets_are_preserved_for_later_stat_decoding() {
+        let mut state = GameState::default();
+
+        assert!(state.update(ServerMessage::UpdateItemStats {
+            packet_size: 5,
+            bitstream: vec![0x10, 0x20, 0x30],
+        }));
+
+        let updates = state.item_stat_updates();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].packet_size(), 5);
+        assert_eq!(updates[0].bitstream(), &[0x10, 0x20, 0x30]);
+    }
+
+    #[test]
+    fn set_item_state_packet_updates_matching_item_flags() {
+        let mut state = GameState::default();
+
+        assert!(state.update(ServerMessage::SetItemState {
+            unit_type: 0,
+            unit_id: 0x0102_0304,
+            item_id: 0x5566_7788,
+            and_value: 0xAABB_CCDD,
+            flags: 0x1122_3344,
+        }));
+
+        let item = state.item(0x5566_7788).expect("item state creates item");
+        let flags = item.state_flags().expect("item state flags should update");
+        assert_eq!(flags.unit_type(), 0);
+        assert_eq!(flags.unit_id(), 0x0102_0304);
+        assert_eq!(flags.and_value(), 0xAABB_CCDD);
+        assert_eq!(flags.flags(), 0x1122_3344);
+    }
+
+    #[test]
     fn npc_zero_life_removes_npc_memory() {
         let mut state = GameState::default();
         state.update(ServerMessage::MonsterAssign {
@@ -998,6 +1385,14 @@ mod tests {
             }
         }
         writer.finish()
+    }
+
+    fn status_bitfield<const N: usize>(fields: &[(u32, usize)]) -> [u8; N] {
+        let mut writer = TestBitWriter::default();
+        for &(value, count) in fields {
+            writer.write_bits(value, count);
+        }
+        writer.finish().try_into().expect("bitfield size mismatch")
     }
 
     #[derive(Default)]

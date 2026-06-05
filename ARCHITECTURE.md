@@ -192,6 +192,7 @@ subset:
 ```text
 0x00..0x11,
 0x15,
+0x18,
 0x19..0x20,
 0x3E,
 0x51,
@@ -203,6 +204,7 @@ subset:
 0x67..0x69,
 0x6B..0x6D,
 0x77,
+0x7D,
 0x8F,
 0x90,
 0x95,
@@ -217,12 +219,13 @@ subset:
 ```
 
 These IDs cover game/load lifecycle packets, map reveal/hide, level warps,
-object removal/handshake, movement/state basics, simple stat and experience
+object removal/handshake, movement/state basics, local HP/MP/stamina bitstreams,
+simple stat and experience
 updates, world objects, darkness/event envelopes, player assignment/join/left
 and player-map updates, NPC movement/state/heal, trade/pong/status envelopes,
-variable-length monster assignment, variable item stat-update envelopes,
-world/owned item action envelopes, state ending, and compression/termination
-signals.
+fixed item-state flag updates, variable-length monster assignment, variable
+item stat-update envelopes, world/owned item action envelopes, state ending, and
+compression/termination signals.
 
 Item action packet envelopes are parsed by `ServerMessage`, but the item
 bitstream itself is owned by `core::object::item`. That module currently decodes
@@ -231,6 +234,9 @@ version, destination/placement, item code, gold amount, used/open sockets,
 level, quality, graphic/color ids, quality-specific ids, runeword metadata,
 armor defense, and durability. The final item stat lists remain raw until
 `ItemStatCost.txt` and related static data are available.
+Server packet `0x3E` is preserved separately in `GameState` as declared-size
+item-stat bitstreams, including the 1.14d padded 34-byte form, because the
+packet envelope does not expose a stable item GUID to update.
 
 The intended direction is:
 
@@ -239,9 +245,9 @@ D2GSPacket bytes -> ServerMessage::parse -> GameState update
 ```
 
 Parsing should prefer structured binary parsing and explicit little-endian field
-reads over ad hoc indexing. Variable-size packets such as chat, item stat
-streams, and bit-packed HP/MP updates should be isolated behind focused parser
-helpers with fixtures.
+reads over ad hoc indexing. Variable-size packets such as chat and item stat
+streams should be isolated behind focused parser helpers with fixtures; the
+local-player HP/MP/stamina bitstreams already follow that pattern.
 
 The current parser uses a small native Rust cursor instead of `deku` or another
 parser framework. That keeps fixed little-endian packet parsing allocation-free,
@@ -258,17 +264,21 @@ coverage.
 - world objects by unit id
 - items by unit id, including latest owner, raw item action bits, typed
   action/category/container ids, decoded item code/quality/socket/durability
-  fields, and generic destination/placement fields
+  fields, generic destination/placement fields, and latest raw `0x7D`
+  item-state flags
+- raw `0x3E` item-stat update bitstreams in arrival order
 - local player id
 - game type, difficulty, locale, ladder/expansion/hardcore flags
 - active map metadata and revealed map tiles
 
 It implements the `Update` trait with `&mut self` and mutates state for the
 currently parsed packet subset: game flags, act load/unload, map reveal/hide,
-player assignment/movement/join/left, world object assignment/removal, NPC
-assignment/movement/state/heal/death, and simple local player stat/experience
-updates. Item action packets currently upsert item owner and decoded packet-time
-item state.
+player assignment/movement/join/left, local-player HP/mana/stamina/movement
+verification, world object assignment/removal/state metadata, NPC
+assignment/movement/state/heal/death, simple local player stat/experience
+updates, and raw item-stat update preservation. Item action packets currently
+upsert item owner and decoded packet-time item state; fixed `0x7D` packets
+update the matching item's raw state flags by GUID.
 
 ### Entities and Objects
 
@@ -443,8 +453,9 @@ behavior and should remain optional.
 - `GameState::update` only handles the parsed state-relevant subset so far.
 - D2R/modern Battle.net port `1119` is intentionally classified as
   encrypted/unknown and is not decoded as D2GS.
-- Item action state now decodes packet-time item fields, but full item stat-list
-  parsing and resolved item semantics still need game-data table integration.
+- Item action state now decodes packet-time item fields, and `0x3E` item stat
+  streams are preserved, but full item stat-list parsing and resolved item
+  semantics still need game-data table integration.
 - `Client::start` still blocks; UI tools must run it on a worker thread or use
   fixture/replay helpers outside the UI loop.
 - `Connection` directly owns a `D2GSReader`, which couples capture to decoding.

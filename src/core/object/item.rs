@@ -162,6 +162,48 @@ pub enum ItemOwner {
     Unit { unit_type: u8, unit_id: u32 },
 }
 
+/// Latest raw item-state flags from D2GS packet `0x7D`.
+///
+/// The server sends this fixed packet with an owning unit id, an item GUID,
+/// an `AndValue`, and the flags after applying that mask. Public packet tables
+/// do not give enough semantic names for every bit, so the library stores the
+/// raw values until item-state flag decoding is backed by static data and
+/// fixtures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ItemStateFlags {
+    unit_type: u8,
+    unit_id: u32,
+    and_value: u32,
+    flags: u32,
+}
+
+impl ItemStateFlags {
+    pub fn new(unit_type: u8, unit_id: u32, and_value: u32, flags: u32) -> Self {
+        Self {
+            unit_type,
+            unit_id,
+            and_value,
+            flags,
+        }
+    }
+
+    pub fn unit_type(&self) -> u8 {
+        self.unit_type
+    }
+
+    pub fn unit_id(&self) -> u32 {
+        self.unit_id
+    }
+
+    pub fn and_value(&self) -> u32 {
+        self.and_value
+    }
+
+    pub fn flags(&self) -> u32 {
+        self.flags
+    }
+}
+
 /// Destination field embedded in the D2GS item bitstream.
 ///
 /// Reverse-engineered packet notes call this field "destination" rather than
@@ -818,6 +860,7 @@ pub struct Item {
     owner: ItemOwner,
     packet_data: Option<ItemPacketData>,
     raw_bitstream: Vec<u8>,
+    state_flags: Option<ItemStateFlags>,
 }
 
 impl Item {
@@ -829,6 +872,7 @@ impl Item {
             owner: ItemOwner::World,
             packet_data: None,
             raw_bitstream: Vec::new(),
+            state_flags: None,
         }
     }
 
@@ -874,6 +918,7 @@ impl Item {
             owner,
             packet_data,
             raw_bitstream: bitstream,
+            state_flags: None,
         }
     }
 
@@ -907,6 +952,14 @@ impl Item {
 
     pub fn raw_bitstream(&self) -> &[u8] {
         &self.raw_bitstream
+    }
+
+    pub fn state_flags(&self) -> Option<ItemStateFlags> {
+        self.state_flags
+    }
+
+    pub fn set_state_flags(&mut self, state_flags: ItemStateFlags) {
+        self.state_flags = Some(state_flags);
     }
 }
 

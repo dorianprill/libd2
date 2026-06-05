@@ -18,7 +18,8 @@ The crate also has read-only/static-data foundations: a raw-preserving `.d2s`
 loader/saver with legacy, D2R, and Reign of the Warlock detection paths; MPQ
 header/hash/decrypt primitives; and generated-map/collision data structures.
 Native seed-to-layout map generation, pathfinding, full MPQ extraction, item
-record parsing, and save editing remain future work.
+record parsing, full item stat-list interpretation, and save editing remain
+future work.
 
 The crate now resolves dependencies and passes:
 
@@ -26,7 +27,7 @@ The crate now resolves dependencies and passes:
 cargo test
 ```
 
-The current suite has 72 unit tests.
+The current suite has 81 unit tests.
 
 ## Work Completed
 
@@ -155,6 +156,23 @@ The current suite has 72 unit tests.
   preserving raw item bits for later stat-list parsing.
 - Added item parser fixture tests using captured-style packet bytes and
   state-transition tests.
+- Added parsing for D2GS `0x18` HP/MP/stamina update packets.
+- Added local-player HP/mana/stamina decoding for `0x18`, `0x95`, and `0x96`,
+  including raw packet-unit vitals, `0x18` regeneration counters, server
+  movement coordinates, and raw movement verification bytes.
+- Added `PlayerVitals` and `PlayerMovement` as public APIs for overlay
+  consumers.
+- Wired known-object state updates from `0x0E` into `GameState`, including
+  portal flags, targetability, and the raw object state value.
+- Fixed `0x3E` item-stat update handling for LoD 1.14d's padded 34-byte packet
+  form while preserving variable declared-size forms for other legacy tables.
+- Preserved raw `0x3E` item-stat bitstreams in `GameState` arrival order. The
+  packet envelope does not expose a stable item GUID, so these are not yet
+  merged into individual `Item` records.
+- Added fixed-layout parsing and `GameState` application for `0x7D`
+  `SetItemState`, storing the latest raw item-state flags by item GUID.
+- Cloned the main packet/state resource repositories into the local `d2suite`
+  workspace as reference checkouts, without vendoring them into the crate.
 - Added generated-map JSON ingestion for the external generator output contract
   used by `@diablo2/map`, including generated-map import tests.
 - Added explicit network transport classification so legacy port `4000` is
@@ -217,7 +235,7 @@ MPQ bytes
 ## Challenges and Risks
 
 - `ServerMessage::parse` covers only a first subset. Many variable-length
-  packets and bit-packed packets still need dedicated parsers.
+  packets and several bit-packed packet families still need dedicated parsers.
 - D2R/modern live Battle.net traffic is not passive-D2GS-decodable in this
   crate. Support should come from offline files, static data, generated maps,
   or already-decoded plaintext fixtures.
@@ -244,8 +262,8 @@ MPQ bytes
 - `Connection` currently couples capture, decode, parse, and state application.
   The callback API is sufficient for a first overlay, but a future stream
   boundary should expose each stage independently.
-- Several packets are variable length or bit-packed and need focused parsing
-  helpers and fixtures.
+- Several packets are variable length or bit-packed and still need focused
+  parsing helpers and fixtures.
 - Live packet capture depends on host networking and privileges; tests should
   use byte fixtures instead.
 - Native map generation and pathfinding are still missing.
@@ -353,7 +371,7 @@ MPQ bytes
 cargo test
 ```
 
-Result: passed. 62 tests.
+Result: passed. 81 tests.
 
 ```text
 cargo fmt --check

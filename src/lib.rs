@@ -14,8 +14,10 @@ pub use crate::core::character_file::{
 };
 pub use crate::core::coordinate::Coordinate;
 pub use crate::core::entity::npc::Npc;
-pub use crate::core::entity::player::Player;
-pub use crate::core::game_state::{Difficulty, GameMapState, GameServerType, GameState, Locale};
+pub use crate::core::entity::player::{Player, PlayerMovement, PlayerVitals};
+pub use crate::core::game_state::{
+    Difficulty, GameMapState, GameServerType, GameState, ItemStatUpdate, Locale,
+};
 pub use crate::core::inventory::{
     GridSize, InventoryProfile, ItemParent, ItemPosition, StoredItemContainer,
 };
@@ -35,7 +37,7 @@ pub use crate::core::network::d2gs::D2GSPacket;
 pub use crate::core::object::item::{
     Item, ItemAction, ItemAffixPair, ItemBufferCoord, ItemBufferId, ItemCategory, ItemCode,
     ItemContainer, ItemDestination, ItemDurability, ItemFlags, ItemOwner, ItemPacketData,
-    ItemPlacement, ItemQuality, ItemRuneword,
+    ItemPlacement, ItemQuality, ItemRuneword, ItemStateFlags,
 };
 pub use crate::core::object::WorldObject;
 pub use crate::core::party::PartyAction;

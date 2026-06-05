@@ -155,17 +155,11 @@ pub enum ServerMessage {
 
     Unused1 = 0x17,
 
-    /// BitStream data contains:
-    /// HP (15bits)
-    /// MP (15bits)
-    /// Stamina (15bits)
-    /// HPRegen (7bits)
-    /// MPRegen (7bits)
-    /// X (16bits)
-    /// Y (16bits)
-    /// dX (8bits)
-    /// dY (8bits)
-    /// TODO parse out into own values.
+    /// Local-player life/mana/stamina, regeneration counters, and movement.
+    ///
+    /// This is the larger HP/MP bitstream variant: 15-bit HP, 15-bit MP,
+    /// 15-bit stamina, 7-bit HP regeneration, 7-bit MP regeneration, 16-bit X,
+    /// 16-bit Y, and two trailing 8-bit movement verification fields.
     HPMPUPDATE {
         packed_bits: [u8; 14],
     } = 0x18,
@@ -308,11 +302,13 @@ pub enum ServerMessage {
     Unused18 = 0x3C,
     Unused19 = 0x3D,
 
-    /// Variable-length item stat update.
+    /// Item-stat bitstream update.
     ///
-    /// This packet carries an item-stat bitstream, but the stable packet
-    /// envelope does not expose the item id directly. Full interpretation is
-    /// deferred until the item-stat bitstream parser exists.
+    /// Legacy packet tables disagree on framing details: 1.13c/1.15 list this
+    /// as variable-length, while 1.14d lists a 34-byte packet whose declared
+    /// `nFullPacketSize` bytes are followed by padding. In both forms the
+    /// stable envelope is only packet id plus declared size; item identity and
+    /// stat-list semantics must be decoded from the bitstream later.
     UpdateItemStats {
         packet_size: u8,
         bitstream: Vec<u8>,
@@ -819,26 +815,20 @@ pub enum ServerMessage {
                                         //]
     } = 0x94,
 
-    /// TODO
-    /// BitStream data contains:
-    /// HP (15bits)
-    /// MP (15bits)
-    /// Stamina (15bits)
-    /// X (16bits)
-    /// Y (16bits)
-    /// dX (8bits)
-    /// dY (8bits)
+    /// Local-player life/mana/stamina and movement verification.
+    ///
+    /// The 12-byte bitstream contains 15-bit HP, 15-bit MP, 15-bit stamina,
+    /// 16-bit X, 16-bit Y, and two trailing 8-bit movement verification fields
+    /// commonly named `dX` and `dY` in packet tables.
     LifeManaUpdate {
         bitfield: [u8; 12],
     } = 0x95,
 
-    /// TODO
-    /// BitStream data contains:
-    /// Stamina (15bits)
-    /// X (16bits)
-    /// Y (16bits)
-    /// dX (8bits)
-    /// dY (8bits)
+    /// Local-player stamina and movement verification.
+    ///
+    /// Public sources disagree on the exact meaning of the trailing movement
+    /// bits. The library decodes stamina, X/Y, and preserves the two 8-bit
+    /// fields as raw values in [`PlayerMovement`](crate::PlayerMovement).
     WalkUpdate {
         bitfield: [u8; 8],
     } = 0x96,
@@ -1235,6 +1225,12 @@ impl ServerMessage {
                     value: cursor.u8(),
                 })
             }
+            0x18 => {
+                let mut cursor = PacketCursor::new(input, 15)?;
+                Ok(Self::HPMPUPDATE {
+                    packed_bits: cursor.array(),
+                })
+            }
             0x19 => {
                 let mut cursor = PacketCursor::new(input, 2)?;
                 Ok(Self::SmallGoldPickup {
@@ -1291,16 +1287,18 @@ impl ServerMessage {
             0x3E => {
                 let mut cursor = PacketCursor::new_variable(input, 2, 1)?;
                 let packet_size = cursor.u8();
-                if packet_size as usize != input.len() {
+                if packet_size < 2 || packet_size as usize > input.len() {
                     return Err(ServerMessageParseError::UnexpectedLength {
                         packet_id,
                         expected: packet_size as usize,
                         actual: input.len(),
                     });
                 }
+                let bitstream_len = packet_size as usize - 2;
+                let remaining = cursor.remaining();
                 Ok(Self::UpdateItemStats {
                     packet_size,
-                    bitstream: cursor.remaining().to_vec(),
+                    bitstream: remaining[..bitstream_len].to_vec(),
                 })
             }
             0x51 => {
@@ -1443,6 +1441,16 @@ impl ServerMessage {
                 let mut cursor = PacketCursor::new(input, 2)?;
                 Ok(Self::TradeAction {
                     request_type: cursor.u8(),
+                })
+            }
+            0x7D => {
+                let mut cursor = PacketCursor::new(input, 18)?;
+                Ok(Self::SetItemState {
+                    unit_type: cursor.u8(),
+                    unit_id: cursor.u32_le(),
+                    item_id: cursor.u32_le(),
+                    and_value: cursor.u32_le(),
+                    flags: cursor.u32_le(),
                 })
             }
             0x8F => {
@@ -1779,6 +1787,16 @@ mod tests {
                 bitstream: vec![0x10, 0x20, 0x30],
             }
         );
+
+        let mut padded_stats = vec![0x3E, 0x05, 0x10, 0x20, 0x30];
+        padded_stats.resize(34, 0);
+        assert_eq!(
+            ServerMessage::parse(&padded_stats).expect("padded item stat update should parse"),
+            ServerMessage::UpdateItemStats {
+                packet_size: 0x05,
+                bitstream: vec![0x10, 0x20, 0x30],
+            }
+        );
     }
 
     #[test]
@@ -1792,6 +1810,26 @@ mod tests {
                 packet_id: 0x9C,
                 expected: 0x0c,
                 actual: 9,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_set_item_state_reads_item_guid_and_flags() {
+        let message = ServerMessage::parse(&[
+            0x7D, 0x00, 0x04, 0x03, 0x02, 0x01, 0x88, 0x77, 0x66, 0x55, 0xDD, 0xCC, 0xBB, 0xAA,
+            0x44, 0x33, 0x22, 0x11,
+        ])
+        .expect("set item state should parse");
+
+        assert_eq!(
+            message,
+            ServerMessage::SetItemState {
+                unit_type: 0,
+                unit_id: 0x0102_0304,
+                item_id: 0x5566_7788,
+                and_value: 0xAABB_CCDD,
+                flags: 0x1122_3344,
             }
         );
     }
@@ -1812,6 +1850,20 @@ mod tests {
                 player_id: 0xB0B9_B4B7,
                 player_x: 0x13FE,
                 player_y: 0x1430,
+            }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[
+                0x18, 0x4F, 0x80, 0x33, 0x8B, 0xD6, 0x08, 0xFF, 0x7E, 0x01, 0x02, 0x03, 0x04, 0x05,
+                0x06,
+            ])
+            .expect("hpmp update should parse"),
+            ServerMessage::HPMPUPDATE {
+                packed_bits: [
+                    0x4F, 0x80, 0x33, 0x8B, 0xD6, 0x08, 0xFF, 0x7E, 0x01, 0x02, 0x03, 0x04, 0x05,
+                    0x06,
+                ],
             }
         );
 
