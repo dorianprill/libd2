@@ -1,4 +1,8 @@
+use std::collections::HashMap;
 use std::fmt;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 const MPQ_MAGIC: &[u8; 4] = b"MPQ\x1a";
@@ -63,6 +67,18 @@ impl MpqCompressionType {
             0x08 => Self::PkWare,
             0x10 => Self::BZip2,
             other => Self::Unknown(other),
+        }
+    }
+}
+
+impl fmt::Display for MpqCompressionType {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Huffman => formatter.write_str("huffman"),
+            Self::Zlib => formatter.write_str("zlib"),
+            Self::PkWare => formatter.write_str("pkware"),
+            Self::BZip2 => formatter.write_str("bzip2"),
+            Self::Unknown(raw) => write!(formatter, "unknown({raw:#04x})"),
         }
     }
 }
@@ -181,11 +197,353 @@ impl MpqBlockEntry {
     }
 }
 
+/// Read-only MPQ v1 archive reader.
+///
+/// Diablo II Classic and Lord of Destruction store most static game data in
+/// MPQ archives. File names are not stored in the hash table, so callers must
+/// already know the logical archive path, for example
+/// `data/global/excel/monstats.bin`. The reader resolves that path through the
+/// encrypted hash table, decrypts sector tables and sectors when required, and
+/// returns the decompressed file bytes.
+///
+/// The implementation is intentionally read-only. It never mutates the source
+/// archive and is limited to the MPQ v1 format used by the legacy Diablo II
+/// archives. Newer D2R/RotW asset containers need a separate loader.
+#[derive(Debug, Clone)]
+pub struct MpqArchive {
+    name: String,
+    source: MpqArchiveSource,
+    header: MpqHeader,
+    hash_table: HashMap<(u32, u32), MpqHashEntry>,
+    block_table: Vec<MpqBlockEntry>,
+}
+
+#[derive(Debug, Clone)]
+enum MpqArchiveSource {
+    Path(PathBuf),
+    Memory(Vec<u8>),
+}
+
+impl MpqArchive {
+    /// Opens an MPQ archive from disk and eagerly reads only its header and
+    /// encrypted hash/block tables.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, MpqError> {
+        let path = path.as_ref().to_path_buf();
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("mpq")
+            .to_owned();
+        Self::load(name, MpqArchiveSource::Path(path))
+    }
+
+    /// Loads an MPQ archive from in-memory bytes.
+    ///
+    /// This is mainly useful for small test fixtures and callers that already
+    /// have archive bytes from another storage layer.
+    pub fn from_bytes(name: impl Into<String>, bytes: Vec<u8>) -> Result<Self, MpqError> {
+        Self::load(name.into(), MpqArchiveSource::Memory(bytes))
+    }
+
+    /// Human-readable archive name, usually the file name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Parsed MPQ header.
+    pub fn header(&self) -> MpqHeader {
+        self.header
+    }
+
+    /// Returns `true` when the archive hash table contains the given logical
+    /// file path.
+    pub fn contains_file(&self, path: &str) -> bool {
+        self.file_entry(path).is_some()
+    }
+
+    /// Reads and decompresses a file from the archive.
+    ///
+    /// The return value is `Ok(None)` when the path is not present in the MPQ
+    /// hash table. Corrupt table data, unsupported compression, and impossible
+    /// sector layouts are reported as errors.
+    pub fn read_file(&self, path: &str) -> Result<Option<Vec<u8>>, MpqError> {
+        let Some(hash_entry) = self.file_entry(path) else {
+            return Ok(None);
+        };
+        let block_index = usize::try_from(hash_entry.block_table_index).map_err(|_| {
+            MpqError::BlockIndexOutOfRange {
+                index: hash_entry.block_table_index,
+                len: self.block_table.len(),
+            }
+        })?;
+        let block_entry =
+            self.block_table
+                .get(block_index)
+                .copied()
+                .ok_or(MpqError::BlockIndexOutOfRange {
+                    index: hash_entry.block_table_index,
+                    len: self.block_table.len(),
+                })?;
+
+        if !block_entry.has_flag(MpqFileFlags::EXISTS) {
+            return Ok(None);
+        }
+        if block_entry.archive_size == 0 {
+            return Ok(Some(Vec::new()));
+        }
+
+        self.extract_block(path, block_entry).map(Some)
+    }
+
+    fn load(name: String, source: MpqArchiveSource) -> Result<Self, MpqError> {
+        let header_raw = source.read_range(0, HEADER_LEN)?;
+        let header = MpqHeader::parse(&header_raw)?;
+        if header.format_version != MpqFormatVersion::Version1 {
+            return Err(MpqError::UnsupportedFormatVersion(header.format_version));
+        }
+
+        let hash_table_size = checked_table_size(header.hash_table_entries, "hash")?;
+        let mut hash_table_raw =
+            source.read_range(header.hash_table_offset as u64, hash_table_size)?;
+        decrypt_mpq_block(
+            &mut hash_table_raw,
+            mpq_hash("(hash table)", MpqHashType::Table),
+        )?;
+
+        let block_table_size = checked_table_size(header.block_table_entries, "block")?;
+        let mut block_table_raw =
+            source.read_range(header.block_table_offset as u64, block_table_size)?;
+        decrypt_mpq_block(
+            &mut block_table_raw,
+            mpq_hash("(block table)", MpqHashType::Table),
+        )?;
+
+        let mut hash_table = HashMap::new();
+        for chunk in hash_table_raw.chunks_exact(TABLE_ENTRY_LEN) {
+            let entry = MpqHashEntry::parse(chunk)?;
+            if entry.block_table_index != u32::MAX && entry.block_table_index != u32::MAX - 1 {
+                hash_table.insert((entry.hash_b, entry.hash_a), entry);
+            }
+        }
+
+        let mut block_table = Vec::with_capacity(header.block_table_entries as usize);
+        for chunk in block_table_raw.chunks_exact(TABLE_ENTRY_LEN) {
+            block_table.push(MpqBlockEntry::parse(chunk)?);
+        }
+
+        Ok(Self {
+            name,
+            source,
+            header,
+            hash_table,
+            block_table,
+        })
+    }
+
+    fn file_entry(&self, path: &str) -> Option<MpqHashEntry> {
+        let hash_a = mpq_hash(path, MpqHashType::HashA);
+        let hash_b = mpq_hash(path, MpqHashType::HashB);
+        self.hash_table.get(&(hash_b, hash_a)).copied()
+    }
+
+    fn extract_block(&self, path: &str, block_entry: MpqBlockEntry) -> Result<Vec<u8>, MpqError> {
+        if block_entry.has_flag(MpqFileFlags::CRC) {
+            return Err(MpqError::UnsupportedFlag {
+                path: path.to_owned(),
+                flag: "crc",
+            });
+        }
+
+        let mut file_data = self
+            .source
+            .read_range(block_entry.offset as u64, block_entry.archive_size as usize)?;
+        let is_encrypted = block_entry.has_flag(MpqFileFlags::ENCRYPTED);
+        let key = self.file_decryption_key(path, block_entry);
+
+        if block_entry.has_flag(MpqFileFlags::SINGLE_UNIT) {
+            if is_encrypted {
+                decrypt_mpq_block(&mut file_data, key)?;
+            }
+            let decoded = decode_mpq_sector(&file_data, block_entry.flags, block_entry.size)?;
+            ensure_decoded_size(path, &decoded, block_entry.size)?;
+            return Ok(decoded);
+        }
+
+        self.extract_sectored_file(path, block_entry, &mut file_data, is_encrypted, key)
+    }
+
+    fn extract_sectored_file(
+        &self,
+        path: &str,
+        block_entry: MpqBlockEntry,
+        file_data: &mut [u8],
+        is_encrypted: bool,
+        key: u32,
+    ) -> Result<Vec<u8>, MpqError> {
+        let sector_size = self.header.sector_size() as usize;
+        let file_size = block_entry.size as usize;
+        let sectors = file_size.div_ceil(sector_size);
+        let sector_table_len = (sectors + 1) * 4;
+        if file_data.len() < sector_table_len {
+            return Err(MpqError::InvalidSectorTable {
+                path: path.to_owned(),
+                reason: "sector table is shorter than expected",
+            });
+        }
+
+        if is_encrypted {
+            decrypt_mpq_block_range(file_data, key.wrapping_sub(1), 0, sector_table_len)?;
+        }
+
+        let mut offsets = Vec::with_capacity(sectors + 1);
+        for index in 0..=sectors {
+            offsets.push(read_u32_le(file_data, index * 4)? as usize);
+        }
+
+        let mut output = vec![0; file_size];
+        let mut output_offset = 0;
+        for sector_index in 0..sectors {
+            let current_offset = offsets[sector_index];
+            let next_offset = offsets[sector_index + 1];
+            if next_offset < current_offset
+                || next_offset > file_data.len()
+                || current_offset < sector_table_len
+            {
+                return Err(MpqError::InvalidSectorTable {
+                    path: path.to_owned(),
+                    reason: "sector offsets point outside the archived file data",
+                });
+            }
+
+            let expected_len = sector_size.min(file_size - output_offset);
+            let mut sector = file_data[current_offset..next_offset].to_vec();
+            if is_encrypted {
+                decrypt_mpq_block(&mut sector, key.wrapping_add(sector_index as u32))?;
+            }
+
+            let decoded = if sector.len() == expected_len {
+                sector
+            } else {
+                decode_mpq_sector(&sector, block_entry.flags, expected_len as u32)?
+            };
+
+            if decoded.len() != expected_len {
+                return Err(MpqError::SizeMismatch {
+                    path: path.to_owned(),
+                    expected: expected_len,
+                    actual: decoded.len(),
+                });
+            }
+
+            output[output_offset..output_offset + expected_len].copy_from_slice(&decoded);
+            output_offset += expected_len;
+        }
+
+        Ok(output)
+    }
+
+    fn file_decryption_key(&self, path: &str, block_entry: MpqBlockEntry) -> u32 {
+        let mut key = mpq_decryption_key(path);
+        if block_entry.has_flag(MpqFileFlags::ENCRYPTION_FIX) {
+            key = key.wrapping_add(block_entry.offset) ^ block_entry.size;
+        }
+        key
+    }
+}
+
+impl MpqArchiveSource {
+    fn read_range(&self, offset: u64, byte_count: usize) -> Result<Vec<u8>, MpqError> {
+        match self {
+            Self::Path(path) => {
+                let mut file = File::open(path).map_err(|error| MpqError::Io {
+                    path: path.display().to_string(),
+                    error: error.to_string(),
+                })?;
+                file.seek(SeekFrom::Start(offset))
+                    .map_err(|error| MpqError::Io {
+                        path: path.display().to_string(),
+                        error: error.to_string(),
+                    })?;
+                let mut output = vec![0; byte_count];
+                file.read_exact(&mut output).map_err(|error| MpqError::Io {
+                    path: path.display().to_string(),
+                    error: error.to_string(),
+                })?;
+                Ok(output)
+            }
+            Self::Memory(bytes) => {
+                let offset =
+                    usize::try_from(offset).map_err(|_| MpqError::InvalidArchiveRange {
+                        offset,
+                        size: byte_count,
+                    })?;
+                let end = offset
+                    .checked_add(byte_count)
+                    .filter(|end| *end <= bytes.len())
+                    .ok_or(MpqError::InvalidArchiveRange {
+                        offset: offset as u64,
+                        size: byte_count,
+                    })?;
+                Ok(bytes[offset..end].to_vec())
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MpqError {
-    TooSmall { len: usize, required: usize },
-    BadMagic { found: [u8; 4] },
-    InvalidDecryptRange { offset: usize, size: usize },
+    TooSmall {
+        len: usize,
+        required: usize,
+    },
+    BadMagic {
+        found: [u8; 4],
+    },
+    InvalidDecryptRange {
+        offset: usize,
+        size: usize,
+    },
+    Io {
+        path: String,
+        error: String,
+    },
+    UnsupportedFormatVersion(MpqFormatVersion),
+    TableTooLarge {
+        table: &'static str,
+        entries: u32,
+    },
+    InvalidArchiveRange {
+        offset: u64,
+        size: usize,
+    },
+    BlockIndexOutOfRange {
+        index: u32,
+        len: usize,
+    },
+    UnsupportedFlag {
+        path: String,
+        flag: &'static str,
+    },
+    InvalidSectorTable {
+        path: String,
+        reason: &'static str,
+    },
+    UnsupportedCompression {
+        compression: MpqCompressionType,
+        mask: u8,
+    },
+    StackedCompression {
+        mask: u8,
+    },
+    DecompressionFailed {
+        compression: MpqCompressionType,
+        error: String,
+    },
+    SizeMismatch {
+        path: String,
+        expected: usize,
+        actual: usize,
+    },
 }
 
 impl fmt::Display for MpqError {
@@ -203,6 +561,57 @@ impl fmt::Display for MpqError {
                 formatter,
                 "invalid MPQ decrypt range offset={} size={}",
                 offset, size
+            ),
+            Self::Io { path, error } => write!(formatter, "failed to read MPQ {path}: {error}"),
+            Self::UnsupportedFormatVersion(version) => {
+                write!(formatter, "unsupported MPQ format version {:?}", version)
+            }
+            Self::TableTooLarge { table, entries } => {
+                write!(
+                    formatter,
+                    "MPQ {table} table has too many entries: {entries}"
+                )
+            }
+            Self::InvalidArchiveRange { offset, size } => write!(
+                formatter,
+                "invalid MPQ archive read range offset={} size={}",
+                offset, size
+            ),
+            Self::BlockIndexOutOfRange { index, len } => write!(
+                formatter,
+                "MPQ hash entry references block table index {} but table length is {}",
+                index, len
+            ),
+            Self::UnsupportedFlag { path, flag } => {
+                write!(formatter, "MPQ file {path} uses unsupported {flag} flag")
+            }
+            Self::InvalidSectorTable { path, reason } => {
+                write!(formatter, "invalid MPQ sector table for {path}: {reason}")
+            }
+            Self::UnsupportedCompression { compression, mask } => write!(
+                formatter,
+                "unsupported MPQ compression {compression} from mask {mask:#04x}"
+            ),
+            Self::StackedCompression { mask } => {
+                write!(
+                    formatter,
+                    "stacked MPQ compression mask {mask:#04x} is unsupported"
+                )
+            }
+            Self::DecompressionFailed { compression, error } => {
+                write!(
+                    formatter,
+                    "failed to decompress MPQ {compression} sector: {error}"
+                )
+            }
+            Self::SizeMismatch {
+                path,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "decoded MPQ file {path} has {} bytes, expected {}",
+                actual, expected
             ),
         }
     }
@@ -333,12 +742,85 @@ fn read_u16_le(raw: &[u8], offset: usize) -> Result<u16, MpqError> {
     Ok(u16::from_le_bytes([raw[offset], raw[offset + 1]]))
 }
 
+fn checked_table_size(entries: u32, table: &'static str) -> Result<usize, MpqError> {
+    usize::try_from(entries)
+        .ok()
+        .and_then(|entries| entries.checked_mul(TABLE_ENTRY_LEN))
+        .ok_or(MpqError::TableTooLarge { table, entries })
+}
+
+fn decode_mpq_sector(data: &[u8], flags: u32, expected_size: u32) -> Result<Vec<u8>, MpqError> {
+    if flags & MpqFileFlags::IMPLODE == MpqFileFlags::IMPLODE {
+        return pklib::explode_bytes(data).map_err(|error| MpqError::DecompressionFailed {
+            compression: MpqCompressionType::PkWare,
+            error: error.to_string(),
+        });
+    }
+
+    if flags & MpqFileFlags::COMPRESSED != MpqFileFlags::COMPRESSED {
+        return Ok(data.to_vec());
+    }
+
+    let Some((&mask, payload)) = data.split_first() else {
+        return Ok(Vec::with_capacity(expected_size as usize));
+    };
+    if mask.count_ones() > 1 {
+        return Err(MpqError::StackedCompression { mask });
+    }
+
+    match MpqCompressionType::from_raw(mask) {
+        MpqCompressionType::PkWare => {
+            pklib::explode_bytes(payload).map_err(|error| MpqError::DecompressionFailed {
+                compression: MpqCompressionType::PkWare,
+                error: error.to_string(),
+            })
+        }
+        MpqCompressionType::Zlib => {
+            let mut decoder = flate2::read::ZlibDecoder::new(payload);
+            let mut output = Vec::with_capacity(expected_size as usize);
+            decoder
+                .read_to_end(&mut output)
+                .map_err(|error| MpqError::DecompressionFailed {
+                    compression: MpqCompressionType::Zlib,
+                    error: error.to_string(),
+                })?;
+            Ok(output)
+        }
+        MpqCompressionType::BZip2 => {
+            let mut decoder = bzip2::read::BzDecoder::new(payload);
+            let mut output = Vec::with_capacity(expected_size as usize);
+            decoder
+                .read_to_end(&mut output)
+                .map_err(|error| MpqError::DecompressionFailed {
+                    compression: MpqCompressionType::BZip2,
+                    error: error.to_string(),
+                })?;
+            Ok(output)
+        }
+        compression => Err(MpqError::UnsupportedCompression { compression, mask }),
+    }
+}
+
+fn ensure_decoded_size(path: &str, decoded: &[u8], expected: u32) -> Result<(), MpqError> {
+    let expected = expected as usize;
+    if decoded.len() == expected {
+        Ok(())
+    } else {
+        Err(MpqError::SizeMismatch {
+            path: path.to_owned(),
+            expected,
+            actual: decoded.len(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        decrypt_mpq_block, encryption_table, mpq_decryption_key, mpq_hash, MpqBlockEntry,
-        MpqFileFlags, MpqFormatVersion, MpqHashEntry, MpqHashType, MpqHeader,
+        decrypt_mpq_block, encryption_table, mpq_decryption_key, mpq_hash, MpqArchive,
+        MpqBlockEntry, MpqFileFlags, MpqFormatVersion, MpqHashEntry, MpqHashType, MpqHeader,
     };
+    use sha2::{Digest, Sha256};
 
     #[test]
     fn generated_encryption_table_matches_known_prefix() {
@@ -444,5 +926,43 @@ mod tests {
         assert_eq!(block.archive_size, 2);
         assert_eq!(block.size, 3);
         assert!(block.has_flag(MpqFileFlags::COMPRESSED));
+    }
+
+    #[test]
+    fn extracts_imploded_file_from_mpq_fixture() {
+        let archive =
+            MpqArchive::open("tests/fixtures/mpq/test-implode.mpq").expect("fixture archive");
+
+        assert_eq!(archive.header().archive_size, 59_335);
+        assert!(archive.contains_file("strings/pd2/patchstring.tbl"));
+        let data = archive
+            .read_file("strings/pd2/patchstring.tbl")
+            .expect("extract")
+            .expect("file exists");
+
+        assert_eq!(data.len(), 61_650);
+        assert_eq!(
+            format!("{:x}", Sha256::digest(&data)),
+            "3867b6f6bc92c4c2895d9cec970e6e499c2d3a9e647cc43cae4449e695b1a2c8"
+        );
+    }
+
+    #[test]
+    fn extracts_pkware_compressed_file_from_mpq_fixture() {
+        let archive =
+            MpqArchive::open("tests/fixtures/mpq/test-pkware.mpq").expect("fixture archive");
+
+        assert_eq!(archive.header().archive_size, 59_364);
+        assert!(archive.contains_file("strings/pd2/patchstring.tbl"));
+        let data = archive
+            .read_file("strings/pd2/patchstring.tbl")
+            .expect("extract")
+            .expect("file exists");
+
+        assert_eq!(data.len(), 61_650);
+        assert_eq!(
+            format!("{:x}", Sha256::digest(&data)),
+            "3867b6f6bc92c4c2895d9cec970e6e499c2d3a9e647cc43cae4449e695b1a2c8"
+        );
     }
 }

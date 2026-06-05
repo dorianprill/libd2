@@ -356,8 +356,9 @@ variable item record boundaries.
 
 ### MPQ Archives and Data Files
 
-`mpq.rs` is the first layer for reading Diablo II static game data from MPQ
-archives. It is intentionally limited to low-level, dependency-free primitives:
+`mpq.rs` is the archive layer for reading Diablo II Classic/LoD static game data
+from MPQ v1 archives. It keeps all archive-specific hashing, decryption, sector,
+and decompression rules behind a read-only API:
 
 - MPQ v1 header parsing
 - hash-table and block-table entry parsing
@@ -365,8 +366,23 @@ archives. It is intentionally limited to low-level, dependency-free primitives:
 - encryption-table generation
 - in-place block/table decryption
 - file flag and compression-type enums
+- read-only archive opening from a path or in-memory fixture bytes
+- logical path lookup through decrypted hash tables
+- sector table decoding, encrypted sector handling, single-unit files, and
+  uncompressed file copies
+- PKWARE implode, zlib, and bzip2 decompression for non-stacked MPQ compression
+  masks
 
-The integration model should be layered:
+`data.rs` sits above this and provides typed Classic/LoD game-data tables. Its
+loader opens `patch_d2.mpq`, `d2exp.mpq`, and `d2data.mpq` in game precedence
+order and parses only the files needed by current packet/UI state:
+
+- `string.tbl`, `expansionstring.tbl`, and `patchstring.tbl`
+- `MonStats.bin` and `MonStats2.bin`
+- `Objects.bin` and `Levels.bin`
+- `Weapons.bin`, `Armor.bin`, and `Misc.bin`
+
+The integration model is:
 
 ```text
 MPQ bytes or file
@@ -378,17 +394,15 @@ MpqHeader + decrypted hash/block tables
 read-only file lookup/extract
     |
     v
-TXT/TBL/bin decoders
+TBL/bin decoders
     |
     v
-typed game-data tables for names, stats, items, maps, and skills
+GameData lookups for monster, object, item, and level names
 ```
 
-Compression and full archive extraction are deliberately not mixed into the
-primitive module. The next MPQ layer should provide a reader abstraction over
-files and memory buffers, then add sector extraction and compression support
-behind small functions. Diablo II classic MPQs need PKWARE implode support;
-later support can add zlib/BZip2 if fixtures require it.
+This does not yet cover TXT parsing, DS1/DT1 map assets, skill/stat/property
+tables, or D2R/RotW asset packaging. Packet item stat decoding should continue
+to preserve raw stat streams until `ItemStatCost.txt` and related tables exist.
 
 ### Maps and Pathing
 

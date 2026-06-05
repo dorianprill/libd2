@@ -46,8 +46,10 @@ This list describes the current code, not the final project goal.
    - [ ] Item records, personal/shared stash pages, quests, waypoints, NPC introductions, corpse payloads, detailed Iron Golem payloads, follower payload contents, and semantic save editing are not implemented.
 4. MPQ and static game data
    - [x] MPQ primitives include header parsing, hash-table/block-table entry parsing, format/compression enums, path hashing, decryption-key derivation, encryption-table generation, and in-place block decryption.
-   - [ ] Full archive lookup/extraction, sector table handling, compression/decompression dispatch, and file fixtures are not implemented.
-   - [ ] TXT/TBL/bin decoders and typed game-data tables are not implemented.
+   - [x] Read-only MPQ v1 archive lookup/extraction supports known logical paths, encrypted hash/block tables, sector tables, encrypted sectors, single-unit files, uncompressed sectors, PKWARE implode, zlib, and bzip2 compression masks.
+   - [x] MPQ extraction is covered by captured fixture archives for both legacy implode and PKWARE compression-mask framing.
+   - [x] Classic/LoD static-data loading resolves MPQ precedence (`patch_d2.mpq`, `d2exp.mpq`, `d2data.mpq`) and parses `.tbl`, `MonStats.bin`, `MonStats2.bin`, `Objects.bin`, `Levels.bin`, `Weapons.bin`, `Armor.bin`, and `Misc.bin`.
+   - [ ] TXT decoders, DS1/DT1 map asset ingestion, skill/stat/property tables, and D2R/RotW CASC-style static-data loading are not implemented.
 5. Maps and pathing
    - [x] Map support currently models generated output: map seeds, validated generator requests for seed/difficulty/act/area, generated-map objects, RLE collision grids, row expansion, point collision queries, level-id-to-act lookup, important-exit classification, and generated-map JSON normalization for single-level and wrapped generator responses.
    - [ ] Native map generation from seed, MPQ-backed asset loading, and DS1/DT1/excel integration are not implemented.

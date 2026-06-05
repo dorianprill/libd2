@@ -3,6 +3,7 @@ pub mod area;
 pub mod character_class;
 pub mod character_file;
 pub mod coordinate;
+pub mod data;
 pub mod entity;
 pub mod game_state;
 pub mod inventory;

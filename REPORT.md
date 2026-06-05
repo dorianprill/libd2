@@ -15,11 +15,12 @@ D2R/modern Battle.net port `1119` is classified as encrypted/unknown transport
 and is not routed into the legacy D2GS reader.
 
 The crate also has read-only/static-data foundations: a raw-preserving `.d2s`
-loader/saver with legacy, D2R, and Reign of the Warlock detection paths; MPQ
-header/hash/decrypt primitives; and generated-map/collision data structures.
-Native seed-to-layout map generation, pathfinding, full MPQ extraction, item
-record parsing, full item stat-list interpretation, and save editing remain
-future work.
+loader/saver with legacy, D2R, and Reign of the Warlock detection paths; a
+read-only MPQ v1 archive extractor for Classic/LoD installs; typed `.tbl`/`.bin`
+static-data loading for monster, object, level, and item-name resolution; and
+generated-map/collision data structures. Native seed-to-layout map generation,
+pathfinding, DS1/DT1 map asset ingestion, full item stat-list interpretation,
+and save editing remain future work.
 
 The crate now resolves dependencies and passes:
 
@@ -27,7 +28,7 @@ The crate now resolves dependencies and passes:
 cargo test
 ```
 
-The current suite has 81 unit tests.
+The current suite has 87 unit tests.
 
 ## Work Completed
 
@@ -125,6 +126,23 @@ The current suite has 81 unit tests.
 - Added MPQ tests using Blaine's hash vectors, decryption-key vectors,
   encryption-table prefix, and a direct decrypt fixture prefix from the MPQ
   package tests.
+- Added `MpqArchive`, a read-only MPQ v1 archive reader over disk paths or
+  in-memory fixture bytes. It loads decrypted hash/block tables, resolves known
+  logical file paths, handles sector tables, encrypted sectors, single-unit
+  files, uncompressed sectors, and non-stacked PKWARE/zlib/bzip2 compression
+  masks.
+- Added small MPQ extraction fixtures copied from Blaine's MIT-licensed MPQ
+  package and tests for both legacy `IMPLODE` and compression-mask PKWARE
+  framing.
+- Added `core::data::GameData`, a Classic/LoD static-data loader that reads
+  `patch_d2.mpq`, `d2exp.mpq`, and `d2data.mpq` in precedence order and parses
+  `string.tbl`, `expansionstring.tbl`, `patchstring.tbl`, `MonStats.bin`,
+  `MonStats2.bin`, `Objects.bin`, `Levels.bin`, `Weapons.bin`, `Armor.bin`, and
+  `Misc.bin`.
+- Added typed lookups for monster names, monster state metadata, object names,
+  level names, and item names. The loader is validated with deterministic
+  parser fixtures and an opt-in read-only local install test via
+  `LIBD2_D2_INSTALL`.
 - Changed live packet capture to open pnet datalink channels without
   promiscuous mode. The library only needs local client/server traffic for
   Diablo II helpers, and promiscuous membership can fail with `ENODEV` on some
@@ -299,27 +317,25 @@ MPQ bytes
    Classic/LoD patch coverage beyond the current 1.14d-oriented assumptions.
 8. Move inline `lod_1_14d_assumed` packet bytes into that fixture tree once
    provenance files exist.
-9. Build read-only MPQ archive extraction on top of `core::mpq`: file/memory
-   reader abstraction, decrypted hash/block tables, path lookup, sector
-   extraction, and uncompressed file support.
-10. Add PKWARE implode decompression for classic Diablo II MPQs, preferably
-   behind a focused module with fixture tests from Blaine's package.
-11. Add TXT/TBL/bin data integration for resolving monster, object, item, skill,
-   and string names from extracted game files.
-12. Add pathfinding over `CollisionGrid` plus dynamic overlays from live
+9. Add TXT decoders and additional typed static tables for item stat decoding,
+   especially `ItemStatCost.txt`, item properties, skills, states, missiles,
+   and treasure/drop metadata.
+10. Add DS1/DT1/static-map ingestion on top of MPQ extraction so generated maps
+   can resolve room tiles, borders, exits, and collision true to the game.
+11. Add pathfinding over `CollisionGrid` plus dynamic overlays from live
    `GameState` units and objects.
-13. Implement `.d2s` quest and waypoint section parsers next; these are
+12. Implement `.d2s` quest and waypoint section parsers next; these are
    marker-delimited and lower risk than item rewriting.
-14. Add a version-dispatched item bitstream reader for legacy/LoD versus D2R
+13. Add a version-dispatched item bitstream reader for legacy/LoD versus D2R
    item encoding.
-15. Port D2R item-list navigation from Horadric Tools in read-only form before
+14. Port D2R item-list navigation from Horadric Tools in read-only form before
    attempting any item write support.
-16. Add scanner-style validation helpers for D2R save invariants: checksum,
+15. Add scanner-style validation helpers for D2R save invariants: checksum,
    size, stat terminator, item counts, follower count/payload length, and
    Warlock follower payload size.
-17. Start native map generation with a narrow area family after fixture coverage
+16. Start native map generation with a narrow area family after fixture coverage
    exists for external generated-map imports.
-18. Keep `ARCHITECTURE.md` and `REPORT.md` updated as each component becomes
+17. Keep `ARCHITECTURE.md` and `REPORT.md` updated as each component becomes
    real implementation.
 
 ## Resource Comparison
@@ -382,7 +398,7 @@ MPQ bytes
 cargo test
 ```
 
-Result: passed. 81 tests.
+Result: passed. 87 tests.
 
 ```text
 cargo fmt --check

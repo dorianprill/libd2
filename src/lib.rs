@@ -13,6 +13,10 @@ pub use crate::core::character_file::{
     SaveSectionMarker,
 };
 pub use crate::core::coordinate::Coordinate;
+pub use crate::core::data::{
+    GameData, GameDataError, ItemRecord, LevelRecord, MonsterRecord, MonsterStateRecord,
+    ObjectRecord,
+};
 pub use crate::core::entity::npc::Npc;
 pub use crate::core::entity::player::{Player, PlayerMovement, PlayerVitals};
 pub use crate::core::game_state::{
@@ -29,8 +33,8 @@ pub use crate::core::map::{
 };
 pub use crate::core::mpq::{
     decrypt_mpq_block, decrypt_mpq_block_range, encryption_table, mpq_decryption_key, mpq_hash,
-    MpqBlockEntry, MpqCompressionType, MpqError, MpqFileFlags, MpqFormatVersion, MpqHashEntry,
-    MpqHashType, MpqHeader,
+    MpqArchive, MpqBlockEntry, MpqCompressionType, MpqError, MpqFileFlags, MpqFormatVersion,
+    MpqHashEntry, MpqHashType, MpqHeader,
 };
 pub use crate::core::network::connection::{Connection, ConnectionEvent};
 pub use crate::core::network::d2gs::D2GSPacket;
