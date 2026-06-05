@@ -8,7 +8,7 @@ The repository contains an early Rust implementation of a passive Diablo II
 state reconstruction library. Network capture, legacy D2GS payload routing,
 packet framing, typed server-message parsing for a first subset, `GameState`
 mutation, and callback events are now wired together through the `Client` and
-`Connection` facades. The plain legacy D2GS packet path is covered by tests;
+`Connection` facades. The plain legacy D2GS packet stream path is covered by tests;
 compressed D2GS/Huffman support has tables and code scaffolding but still needs
 captured fixture tests before it should be treated as production-supported.
 D2R/modern Battle.net port `1119` is classified as encrypted/unknown transport
@@ -26,7 +26,7 @@ The crate now resolves dependencies and passes:
 cargo test
 ```
 
-The current suite has 62 unit tests.
+The current suite has 72 unit tests.
 
 ## Work Completed
 
@@ -68,6 +68,17 @@ The current suite has 62 unit tests.
   and printing them internally.
 - Fixed D2GS packet-size detection for variable-length `0x5B` packets to read a
   little-endian short.
+- Fixed live LoD D2GS TCP payload handling so one captured payload can contain
+  several back-to-back server packets. This removes false oversized-packet
+  errors for map reveal bursts, vendor/item bursts, player assignment bursts,
+  and common NPC/player movement bursts.
+- Corrected the 1.14d packet-size table entry for `0x01` game flags from 9 to
+  8 bytes and added stream-splitting tests from live capture byte sequences.
+- Removed noisy debug output from the D2GS/Huffman path and made Huffman decode
+  append to a vector instead of attempting to copy into a zero-length slice.
+- Added parsers for common live-observed server packets `0x53`, `0x5A`,
+  `0x77`, `0x8F`, `0x90`, `0x95`, `0x96`, `0xA9`, `0xAF`, and `0xB0`.
+- Wired `0x90 PlayerMapUpdate` into `GameState` for known player coordinates.
 - Added state-transition tests; the suite now covers packet bytes ->
   `ServerMessage` -> `GameState` for player assignment, world objects, and NPC
   assignment, plus direct state updates for movement, death/removal, flags,
@@ -247,8 +258,8 @@ MPQ bytes
 
 ## Recommended Next Steps
 
-1. Add captured fixture tests for D2GS framing and Huffman decompression before
-   changing decoder behavior further.
+1. Add captured fixture tests for compressed D2GS/Huffman decompression before
+   treating compressed legacy traffic as supported.
 2. Expand item stat-list interpretation after game-data table loading exists,
    especially `ItemStatCost.txt` bit widths and parameter rules.
 3. Expand `ServerMessage::parse` with the next state-relevant variable-length

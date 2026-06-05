@@ -20,14 +20,14 @@ This list describes the current code, not the final project goal.
 1. Network and protocol support
    - [x] Passive packet capture through `Client`/`Connection` using `pnet`; legacy Classic/LoD plaintext D2GS server traffic from source port `4000` is routed to the D2GS reader. Client-to-server packets with destination port `4000` are ignored for now because they use the separate client packet space. Capture opens the datalink channel without promiscuous mode because local client/server traffic is sufficient and promiscuous membership can fail on some wireless interfaces.
    - [x] D2R/modern Battle.net traffic on port `1119` is classified as encrypted/unknown transport and is no longer fed into the legacy D2GS parser.
-   - [x] Plain D2GS packets can be queued as `D2GSPacket`, parsed as typed `ServerMessage`s for the supported subset, and applied to `GameState`.
-   - [ ] Compressed D2GS packets have chunk-size handling, a packet-size table, and Huffman decoder scaffolding, but still need captured fixture tests before they should be treated as supported.
-   - [x] Parsed server packet IDs: `0x00..0x11`, `0x15`, `0x19..0x20`, `0x3E`, `0x51`, `0x59`, `0x5B`, `0x5C`, `0x67..0x69`, `0x6B..0x6D`, `0x9C`, `0x9D`, `0xAB`, and `0xAC`.
-   - [ ] Missing high-priority packet parsers include HP/MP/stamina bitstreams (`0x18`, `0x95`, `0x96`), party/relationship packets (`0x75`, `0x7F`, `0x8B..0x8D`), mercenary/summon updates (`0x4E`, `0x81`, `0x9E..0xA2`), chat/event streams, quest streams, and full item stat-list interpretation.
+   - [x] Plain D2GS TCP payloads are split into individual `D2GSPacket`s before parsing, including live-observed concatenated map-reveal and `0x9C` item bursts.
+   - [ ] Compressed D2GS packets have corrected chunk-size handling, a packet-size table, and Huffman decoder scaffolding, but still need captured fixture tests before they should be treated as supported.
+   - [x] Parsed server packet IDs: `0x00..0x11`, `0x15`, `0x19..0x20`, `0x3E`, `0x51`, `0x53`, `0x59`, `0x5A`, `0x5B`, `0x5C`, `0x67..0x69`, `0x6B..0x6D`, `0x77`, `0x8F`, `0x90`, `0x95`, `0x96`, `0x9C`, `0x9D`, `0xA9`, `0xAB`, `0xAC`, `0xAF`, and `0xB0`.
+   - [ ] Missing high-priority packet parsers include detailed HP/MP/stamina bitstream decoding (`0x18`, `0x95`, `0x96`), party/relationship packets (`0x75`, `0x7F`, `0x8B..0x8D`), mercenary/summon updates (`0x4E`, `0x81`, `0x9E..0xA2`), chat/event streams, quest streams, and full item stat-list interpretation.
    - [ ] BNCS and MCP/Realm protocol support are not implemented; `realm_connection` currently contains declarative status/message sketches only.
 2. Runtime game-state reconstruction
    - [x] Tracks game type, difficulty, locale, expansion/ladder/hardcore flags, local player id, and active act/map metadata.
-   - [x] Tracks players for assignment, join/leave, movement, level, simple local stats, and experience updates.
+   - [x] Tracks players for assignment, join/leave, movement, player-map updates, level, simple local stats, and experience updates.
    - [x] Tracks NPCs/monsters for assignment, movement/action/attack/stop, state, life percent, heal, and death/removal.
    - [x] Tracks world objects for assignment/removal and level-warp entrance markers from `0x09`.
    - [x] Tracks map reveal/hide tiles from packets.

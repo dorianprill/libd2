@@ -107,17 +107,11 @@ const COMPRESSION_TABLE: [u32; 256] = [
     0x22080203, 0x0C080306, 0x0C080307, 0x0D080300, 0x0D080301, 0x0D080302, 0x0D080303, 0x6C060000,
 ];
 
-pub fn decode(input: &[u8], output: &mut [u8]) {
-    if Some(input) == None {
-        panic!("decode(): Invalid input reference");
-    }
-    // result needs to be a res
-    //let mut result: [u8; 1024] = [0; 1024];
+pub fn decode(input: &[u8], output: &mut Vec<u8>) {
     let mut result: Vec<u8> = Vec::with_capacity(1024);
     let mut size = input.len();
     let mut b: usize = 0;
     let mut i: usize = 0;
-    let mut max: usize = result.capacity(); // available storage indicator
     let mut count: i32 = 0x20;
 
     loop {
@@ -131,8 +125,6 @@ pub fn decode(input: &[u8], output: &mut [u8]) {
                 i += 1;
             }
         }
-        dbg!(b);
-        dbg!(b >> 0x18);
         let index = INDEX_TABLE[b >> 0x18] as usize;
         let mut a = CHARACTER_TABLE[index] as usize;
         let d = (b >> (0x18 - a)) & BIT_MASKS[a] as usize;
@@ -140,16 +132,10 @@ pub fn decode(input: &[u8], output: &mut [u8]) {
 
         count += c as i32;
         if count > 0x20 {
-            output.copy_from_slice(result.as_slice());
+            output.extend_from_slice(result.as_slice());
             return;
         }
 
-        max -= 1;
-        if max == 0 {
-            // double available capacity
-            let len = result.len() * 2;
-            result.resize(len, 0);
-        }
         a = CHARACTER_TABLE[index + 2 * d + 1] as usize;
 
         result.push(a as u8);
@@ -159,12 +145,38 @@ pub fn decode(input: &[u8], output: &mut [u8]) {
 }
 
 pub fn get_chunk_params(raw: &[u8], header_size: &mut usize) -> usize {
-    if raw[0] < 0xF0 {
+    let Some(first) = raw.first().copied() else {
+        *header_size = 0;
+        return 0;
+    };
+
+    if first < 0xF0 {
         *header_size = 1_usize;
-        return raw[0] as usize - 1;
+        return (first as usize).saturating_sub(1);
     }
     *header_size = 2;
-    // only bottom 3 nibbles due to header offset (-2)?
-    let len = ((raw[0] as u16) & 0x0F) << 8;
-    (len | (raw[1] as u16)) as usize + 2
+    let Some(second) = raw.get(1).copied() else {
+        return 0;
+    };
+    let len = ((first as u16 & 0x0F) << 8) | second as u16;
+    (len as usize).saturating_sub(*header_size)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::get_chunk_params;
+
+    #[test]
+    fn chunk_params_return_payload_length_without_header() {
+        let mut header = 0;
+
+        assert_eq!(get_chunk_params(&[0x05, 1, 2, 3, 4], &mut header), 4);
+        assert_eq!(header, 1);
+
+        assert_eq!(
+            get_chunk_params(&[0xF1, 0x05, 1, 2, 3, 4, 5], &mut header),
+            0x0103
+        );
+        assert_eq!(header, 2);
+    }
 }

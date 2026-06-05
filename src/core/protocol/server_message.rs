@@ -1315,6 +1315,14 @@ impl ServerMessage {
                     interaction: cursor.u8(),
                 })
             }
+            0x53 => {
+                let mut cursor = PacketCursor::new(input, 10)?;
+                Ok(Self::DarknessUpdate {
+                    act: cursor.u32_le(),
+                    angle: cursor.u32_le(),
+                    on_off: cursor.u8(),
+                })
+            }
             0x59 => {
                 let mut cursor = PacketCursor::new(input, 26)?;
                 Ok(Self::AssignPlayer {
@@ -1323,6 +1331,17 @@ impl ServerMessage {
                     szname: cursor.array(),
                     x: cursor.u16_le(),
                     y: cursor.u16_le(),
+                })
+            }
+            0x5A => {
+                let mut cursor = PacketCursor::new(input, 40)?;
+                Ok(Self::EventMessages {
+                    message_type: cursor.u8(),
+                    color: cursor.u8(),
+                    arg: cursor.u32_le(),
+                    arg_type: cursor.u8(),
+                    name1: cursor.array(),
+                    name2: cursor.array(),
                 })
             }
             0x5B => {
@@ -1420,6 +1439,45 @@ impl ServerMessage {
                     unit_life: cursor.u8(),
                 })
             }
+            0x77 => {
+                let mut cursor = PacketCursor::new(input, 2)?;
+                Ok(Self::TradeAction {
+                    request_type: cursor.u8(),
+                })
+            }
+            0x8F => {
+                let mut cursor = PacketCursor::new(input, 33)?;
+                Ok(Self::Pong {
+                    pong1: cursor.u32_le(),
+                    pong2: cursor.u32_le(),
+                    pong3: cursor.u32_le(),
+                    count: cursor.u32_le(),
+                    pong5: cursor.u32_le(),
+                    pong6_warden: cursor.u32_le(),
+                    pong7_warden: cursor.u32_le(),
+                    pong8_warden: cursor.u32_le(),
+                })
+            }
+            0x90 => {
+                let mut cursor = PacketCursor::new(input, 13)?;
+                Ok(Self::PlayerMapUpdate {
+                    player_id: cursor.u32_le(),
+                    player_x: cursor.u32_le(),
+                    player_y: cursor.u32_le(),
+                })
+            }
+            0x95 => {
+                let mut cursor = PacketCursor::new(input, 13)?;
+                Ok(Self::LifeManaUpdate {
+                    bitfield: cursor.array(),
+                })
+            }
+            0x96 => {
+                let mut cursor = PacketCursor::new(input, 9)?;
+                Ok(Self::WalkUpdate {
+                    bitfield: cursor.array(),
+                })
+            }
             0x9C => {
                 let mut cursor = PacketCursor::new_variable(input, 8, 2)?;
                 let action = cursor.u8();
@@ -1460,6 +1518,14 @@ impl ServerMessage {
                     bitstream: cursor.remaining().to_vec(),
                 })
             }
+            0xA9 => {
+                let mut cursor = PacketCursor::new(input, 7)?;
+                Ok(Self::EndState {
+                    unit_type: cursor.u8(),
+                    unit_id: cursor.u32_le(),
+                    state: cursor.u8(),
+                })
+            }
             0xAB => {
                 let mut cursor = PacketCursor::new(input, 7)?;
                 Ok(Self::NpcHeal {
@@ -1493,6 +1559,13 @@ impl ServerMessage {
                     bitstream: cursor.remaining().to_vec(),
                 })
             }
+            0xAF => {
+                let mut cursor = PacketCursor::new(input, 2)?;
+                Ok(Self::AdvertiseCompressionMode {
+                    use_compression: cursor.u8(),
+                })
+            }
+            0xB0 => parse_empty(input, Self::GameConnectionTerminated),
             _ => Err(ServerMessageParseError::UnsupportedPacketId(packet_id)),
         }
     }
@@ -1719,6 +1792,34 @@ mod tests {
                 packet_id: 0x9C,
                 expected: 0x0c,
                 actual: 9,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_common_live_capture_packets() {
+        assert_eq!(
+            ServerMessage::parse(&[0xAF, 0x00]).expect("compression mode should parse"),
+            ServerMessage::AdvertiseCompressionMode { use_compression: 0 }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[
+                0x90, 0xB7, 0xB4, 0xB9, 0xB0, 0xFE, 0x13, 0x00, 0x00, 0x30, 0x14, 0x00, 0x00,
+            ])
+            .expect("player map update should parse"),
+            ServerMessage::PlayerMapUpdate {
+                player_id: 0xB0B9_B4B7,
+                player_x: 0x13FE,
+                player_y: 0x1430,
+            }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[0x96, 0x4F, 0x80, 0x33, 0x8B, 0xD6, 0x08, 0xFF, 0x7E])
+                .expect("walk update should parse"),
+            ServerMessage::WalkUpdate {
+                bitfield: [0x4F, 0x80, 0x33, 0x8B, 0xD6, 0x08, 0xFF, 0x7E],
             }
         );
     }

@@ -169,15 +169,17 @@ split those stages more cleanly.
 `D2GSPacket`s:
 
 - plain packet detection
+- plain TCP payload stream splitting
 - compressed chunk length parsing
 - Huffman decompression
-- packet-size calculation for decompressed packet streams
+- packet-size calculation for plain and decompressed packet streams
 - packet queueing
 
 Packets remain queued for callers. `Connection` currently drains that queue and
 applies successfully parsed messages to `GameState`.
 
-The plain-packet path is covered by unit tests. The compressed-packet path has
+The plain-packet stream path is covered by unit tests, including live-observed
+concatenated map-reveal and item-action bursts. The compressed-packet path has
 chunk parsing and Huffman tables/decoder code, but it still needs captured
 fixture tests and audit before it should be considered reliable input support.
 
@@ -193,22 +195,34 @@ subset:
 0x19..0x20,
 0x3E,
 0x51,
+0x53,
 0x59,
+0x5A,
 0x5B,
 0x5C,
 0x67..0x69,
 0x6B..0x6D,
+0x77,
+0x8F,
+0x90,
+0x95,
+0x96,
 0x9C,
 0x9D,
+0xA9,
 0xAB,
-0xAC
+0xAC,
+0xAF,
+0xB0
 ```
 
 These IDs cover game/load lifecycle packets, map reveal/hide, level warps,
 object removal/handshake, movement/state basics, simple stat and experience
-updates, world objects, player assignment/join/left, NPC movement/state/heal,
-variable-length monster assignment, variable item stat-update envelopes, and
-world/owned item action envelopes.
+updates, world objects, darkness/event envelopes, player assignment/join/left
+and player-map updates, NPC movement/state/heal, trade/pong/status envelopes,
+variable-length monster assignment, variable item stat-update envelopes,
+world/owned item action envelopes, state ending, and compression/termination
+signals.
 
 Item action packet envelopes are parsed by `ServerMessage`, but the item
 bitstream itself is owned by `core::object::item`. That module currently decodes
@@ -423,8 +437,8 @@ behavior and should remain optional.
 ## Known Architectural Gaps
 
 - `ServerMessage::parse` covers a first fixed-size subset plus variable-length
-  NPC assignment, player join, item stat-update envelopes, and item action
-  packets.
+  NPC assignment, player join, item stat-update envelopes, item action packets,
+  and live-observed plain D2GS packet bursts.
 - Compressed D2GS/Huffman decoding still lacks captured fixture validation.
 - `GameState::update` only handles the parsed state-relevant subset so far.
 - D2R/modern Battle.net port `1119` is intentionally classified as

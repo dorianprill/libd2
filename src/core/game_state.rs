@@ -448,6 +448,16 @@ impl Update for GameState {
                 }
                 true
             }
+            ServerMessage::PlayerMapUpdate {
+                player_id,
+                player_x,
+                player_y,
+            } => {
+                if player_x > u16::MAX as u32 || player_y > u16::MAX as u32 {
+                    return false;
+                }
+                self.move_player(player_id, Coordinate::new(player_x as u16, player_y as u16))
+            }
             ServerMessage::RemoveObject { unit_type, unit_id } => {
                 self.remove_unit(unit_type, unit_id)
             }
@@ -693,6 +703,28 @@ mod tests {
         let player = state.player(7).expect("player exists");
         assert_eq!(player.location().x(), 18);
         assert_eq!(player.location().y(), 19);
+    }
+
+    #[test]
+    fn player_map_update_moves_existing_player() {
+        let mut state = GameState::default();
+        state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: 1,
+            szname: *b"Joan\0\0\0\0\0\0\0\0\0\0\0\0",
+            x: 10,
+            y: 20,
+        });
+
+        assert!(state.update(ServerMessage::PlayerMapUpdate {
+            player_id: 7,
+            player_x: 5118,
+            player_y: 5168,
+        }));
+
+        let player = state.player(7).expect("player exists");
+        assert_eq!(player.location().x(), 5118);
+        assert_eq!(player.location().y(), 5168);
     }
 
     #[test]

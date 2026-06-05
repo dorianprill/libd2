@@ -16,7 +16,7 @@ const PACKET_SIZES: [i32; 177] = [
     // 13, 26, 6, 8, 0, 13, 9, 1, 7, 16, 17, 7, 0, 0, 7, 8,
     // 10, 7, 8, 24, 3, 8, 0, 7, 0, 7, 0, 7, 0, 0, 0, 0,
     // 1 ];
-    1, 9, 1, 12, 1, 1, 1, 6, 6, 11, 6, 6, 9, 13, 12, 16, /* 1 */ 16, 8, 26, 14, 18, 11, -1, -1,
+    1, 8, 1, 12, 1, 1, 1, 6, 6, 11, 6, 6, 9, 13, 12, 16, /* 1 */ 16, 8, 26, 14, 18, 11, -1, -1,
     15, 2, 2, 3, 5, 3, 4, 6, /* 2 */ 10, 12, 12, 13, 90, 90, -1, 40, 103, 97, 15, 0, 8, 0, 0,
     0, /* 3 */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 34, 8, /* 4 */ 13, 0, 6, 0, 0,
     13, 0, 11, 11, 0, 0, 0, 16, 17, 7, 1, /* 5 */ 15, 14, 42, 10, 3, 0, 0, 14, 7, 26, 40, -1,
@@ -30,12 +30,14 @@ const PACKET_SIZES: [i32; 177] = [
 pub struct D2GSReader {
     // used as a single ended queue here
     packets: VecDeque<D2GSPacket>,
+    packet_stream: Vec<u8>,
 }
 
 impl D2GSReader {
     pub fn new() -> Self {
         D2GSReader {
             packets: VecDeque::with_capacity(128),
+            packet_stream: Vec::with_capacity(1600),
         }
     }
 
@@ -43,73 +45,46 @@ impl D2GSReader {
         self.packets.pop_front()
     }
 
-    /// read() handles the D2GS packet decompression
-    /// message size can be transmitted in either one u8 or two u8 as
-    /// depdending on whether the first byte is >= 0xF0
-    /// Message Layout:
-    /// if `byte[0] < 0xF0`:
-    /// 	(UINT8) Message Size
-    /// 	(VOID) Message Data
-    /// if `byte[0] >= 0xF0`:
-    /// 	(UINT8) High Message Size
-    /// 	(UINT8) Low Message Size
-    /// 	(VOID) Message Data
-    /// for the latter	message_size := ((High << 8) | Low) & 0xFFF
-    /// message_size does include itself
-    /// One compressed package will decode into several uncompressed ones
+    /// Normalizes a captured legacy D2GS payload into individual game packets.
+    ///
+    /// Live packet capture sees TCP payloads, not semantic D2GS messages. One
+    /// payload may contain a single packet, several back-to-back packets, or the
+    /// first part of a packet completed by a later payload. Classic/LoD commonly
+    /// leaves game traffic uncompressed after the `0xAF` compression-mode packet,
+    /// so an uncompressed payload starts directly with a D2GS packet id such as
+    /// `0x07` (map reveal) or `0x9C` (world item action). This reader splits that
+    /// byte stream using the 1.14d server packet-size table before callers parse
+    /// protocol messages.
+    ///
+    /// Compressed payloads use Diablo II's Huffman framing. A compressed chunk
+    /// length can be encoded in one byte or two bytes; the encoded length includes
+    /// the framing header. A chunk can decompress to several game packets, which
+    /// are fed through the same stream splitter.
     pub fn read(&mut self, raw: &[u8]) {
-        // else is compressed packet
-        let mut decompressed_chunk = Vec::with_capacity(raw.len());
-        let mut start: usize = 0;
-        let mut nheader: usize = 0;
-        let mut ndata: usize = 0;
-        let mut end: usize;
+        if raw.is_empty() {
+            return;
+        }
 
-        while (start + nheader + ndata) < raw.len() {
-            // is invalid packet
-            if raw[start..].len() < 2 || (raw[start] >= 0xF0 && raw[start..].len() < 3) {
-                println!("D2GSReader::read(): input too short");
-                dbg!(ndata);
-                dbg!(nheader);
-                dbg!(raw[start..].len());
-                dbg!(raw.len());
-                dbg!(raw[0]);
+        if raw[0] < 0xF0 {
+            self.queue_packet_stream(raw);
+            return;
+        }
+
+        let mut start = 0;
+        while start < raw.len() {
+            let Some((header_size, data_size)) = compressed_chunk_lengths(&raw[start..]) else {
+                return;
+            };
+            let data_start = start + header_size;
+            let data_end = data_start + data_size;
+            if data_end > raw.len() {
                 return;
             }
 
-            // is plain packet
-            if raw[start] < 0xF0 {
-                self.packets.push_back(D2GSPacket { data: raw.to_vec() });
-                return;
-            }
-
-            // else is compressed packet
-            ndata = huffman::get_chunk_params(&raw[start..], &mut nheader);
-            if ndata > raw[start..].len() {
-                // something went wrong
-                println!("D2GSReader::read(): invalid chunk params");
-                dbg!(ndata);
-                dbg!(nheader);
-                dbg!(raw[start..].len());
-                dbg!(raw.len());
-                dbg!(raw[0]);
-                return;
-            }
-            // index needs -1 since start is already header[0]?
-            end = start + nheader + ndata;
-            dbg!(end);
-            huffman::decode(&raw[start + nheader..end], &mut decompressed_chunk); // ..end not included!
-            start = end + 1; // proceed with next chunk
-            while !decompressed_chunk.is_empty() {
-                let mut actual_size: i32 = 0;
-                if !get_packet_size(&decompressed_chunk, &mut actual_size) {
-                    println!("D2GSReader::read(): failed to determine packet length");
-                    return;
-                }
-                self.packets.push_back(D2GSPacket {
-                    data: decompressed_chunk.drain(0..actual_size as usize).collect(),
-                });
-            }
+            let mut decompressed_chunk = Vec::with_capacity(data_size.saturating_mul(2));
+            huffman::decode(&raw[data_start..data_end], &mut decompressed_chunk);
+            self.queue_packet_stream(&decompressed_chunk);
+            start = data_end;
         }
 
         // Packets remain queued for the caller to parse and apply to game state.
@@ -120,108 +95,221 @@ impl D2GSReader {
             println!("{}", p);
         }
     }
+
+    fn queue_packet_stream(&mut self, stream: &[u8]) {
+        self.packet_stream.extend_from_slice(stream);
+
+        while !self.packet_stream.is_empty() {
+            match packet_size_status(&self.packet_stream) {
+                PacketSizeStatus::Complete(size) if self.packet_stream.len() >= size => {
+                    let data = self.packet_stream.drain(0..size).collect();
+                    self.packets.push_back(D2GSPacket { data });
+                }
+                PacketSizeStatus::Complete(_) | PacketSizeStatus::NeedMore => break,
+                PacketSizeStatus::Unknown => {
+                    let data = self.packet_stream.drain(..).collect();
+                    self.packets.push_back(D2GSPacket { data });
+                }
+            }
+        }
+    }
 } // impl D2GSReader
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PacketSizeStatus {
+    Complete(usize),
+    NeedMore,
+    Unknown,
+}
+
+fn compressed_chunk_lengths(raw: &[u8]) -> Option<(usize, usize)> {
+    let first = *raw.first()?;
+    if first < 0xF0 {
+        let packet_size = first as usize;
+        return packet_size.checked_sub(1).map(|data_size| (1, data_size));
+    }
+
+    let second = *raw.get(1)?;
+    let packet_size = (((first & 0x0F) as usize) << 8) | second as usize;
+    packet_size.checked_sub(2).map(|data_size| (2, data_size))
+}
 
 // translated from OmegaBot
 pub fn get_chat_packet_size(input: &[u8], result: &mut i32) -> bool {
-    //let mut output: i32 = 0;
     if input.len() < 12 {
         return false;
     }
 
     const INITIAL_OFFSET: i32 = 10;
-    let mut name_offset: i32 = input
-        .iter()
-        .position(|&x| (x as i32) == INITIAL_OFFSET)
-        .unwrap() as i32;
-
-    if name_offset == -1 {
+    let Some(name_position) = input.iter().position(|&x| (x as i32) == INITIAL_OFFSET) else {
         return false;
-    }
+    };
+    let mut name_offset = name_position as i32;
     name_offset -= INITIAL_OFFSET;
 
-    let mut message_offset: i32 = input
+    let Some(message_position) = input
         .iter()
         .position(|&x| (x as i32) == (INITIAL_OFFSET + name_offset + 1))
-        .unwrap() as i32;
-
-    if message_offset == -1 {
+    else {
         return false;
-    }
+    };
+    let mut message_offset = message_position as i32;
 
     message_offset = message_offset - INITIAL_OFFSET - name_offset - 1;
     *result = INITIAL_OFFSET + name_offset + 1 + message_offset + 1;
-    dbg!(*result);
 
     true
 }
 
-// This was taken from Redvex according to qqbot source
+// This was taken from Redvex according to qqbot source and corrected for
+// Diablo II 1.14d packet streams where one TCP payload may contain many packets.
 pub fn get_packet_size(input: &[u8], result: &mut i32) -> bool {
-    let identifier: u8 = input[0];
+    match packet_size_status(input) {
+        PacketSizeStatus::Complete(size) => {
+            *result = size as i32;
+            true
+        }
+        PacketSizeStatus::NeedMore | PacketSizeStatus::Unknown => {
+            *result = 0;
+            false
+        }
+    }
+}
+
+fn packet_size_status(input: &[u8]) -> PacketSizeStatus {
+    if input.is_empty() {
+        return PacketSizeStatus::NeedMore;
+    }
+
+    let identifier = input[0];
     let size = input.len() as i32;
 
     match identifier {
         0x26 => {
-            if get_chat_packet_size(input, result) {
-                return true;
+            let mut result = 0;
+            if get_chat_packet_size(input, &mut result) {
+                return positive_size(result);
             }
+            PacketSizeStatus::NeedMore
         }
         0x5B => {
             if size >= 3 {
-                *result = ((input[2] as i32) << 8) | input[1] as i32;
-                return true;
+                return positive_size(((input[2] as i32) << 8) | input[1] as i32);
             }
+            PacketSizeStatus::NeedMore
         }
         0x94 => {
             if size >= 2 {
-                *result = input[1] as i32 * 3 + 6;
-                return true;
+                return positive_size(input[1] as i32 * 3 + 6);
             }
+            PacketSizeStatus::NeedMore
         }
         0xA8 | 0xAA => {
             if size >= 7 {
-                *result = input[6] as i32;
-                return true;
+                return positive_size(input[6] as i32);
             }
+            PacketSizeStatus::NeedMore
         }
         0xAC => {
             if size >= 13 {
-                *result = input[12] as i32;
-                return true;
+                return positive_size(input[12] as i32);
             }
+            PacketSizeStatus::NeedMore
         }
         0xAE => {
             if size >= 3 {
-                *result = (3 + ((input[1] as i32) << 8)) & input[2] as i32;
-                return true;
+                return positive_size(3 + (((input[1] as i32) << 8) | input[2] as i32));
             }
+            PacketSizeStatus::NeedMore
         }
         0x3E => {
             if size >= 2 {
-                *result = input[1] as i32;
-                return true;
+                return positive_size(input[1] as i32);
             }
+            PacketSizeStatus::NeedMore
         }
-        0x9C => {
+        0x9C | 0x9D => {
             if size >= 3 {
-                *result = input[2] as i32;
-                return true;
+                return positive_size(input[2] as i32);
             }
+            PacketSizeStatus::NeedMore
         }
-        0x9D => {
-            if size >= 3 {
-                *result = input[2] as i32;
-                return true;
-            }
-        }
+        0xAF => PacketSizeStatus::Complete(2),
+        0xFF => PacketSizeStatus::Complete(1),
         _ => {
-            if identifier < PACKET_SIZES.len() as u8 {
-                *result = PACKET_SIZES[identifier as usize] as i32;
-                return *result != 0;
+            if (identifier as usize) < PACKET_SIZES.len() {
+                return positive_size(PACKET_SIZES[identifier as usize]);
             }
+            PacketSizeStatus::Unknown
         }
     }
-    *result = 0;
-    false
+}
+
+fn positive_size(size: i32) -> PacketSizeStatus {
+    if size > 0 {
+        PacketSizeStatus::Complete(size as usize)
+    } else {
+        PacketSizeStatus::Unknown
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{get_packet_size, D2GSReader};
+
+    fn drain_packet_lengths(reader: &mut D2GSReader) -> Vec<usize> {
+        let mut lengths = Vec::new();
+        while let Some(packet) = reader.next() {
+            lengths.push(packet.data.len());
+        }
+        lengths
+    }
+
+    #[test]
+    fn packet_size_table_matches_1_14d_game_flags_length() {
+        let mut len = 0;
+
+        assert!(get_packet_size(&[0x01], &mut len));
+        assert_eq!(len, 8);
+    }
+
+    #[test]
+    fn plain_payload_can_contain_multiple_map_reveals() {
+        let mut reader = D2GSReader::new();
+        let payload = [
+            0x07, 0x70, 0x04, 0x78, 0x03, 0x01, 0x07, 0x78, 0x04, 0x78, 0x03, 0x01, 0x07, 0x80,
+            0x04, 0x78, 0x03, 0x01,
+        ];
+
+        reader.read(&payload);
+
+        assert_eq!(drain_packet_lengths(&mut reader), vec![6, 6, 6]);
+    }
+
+    #[test]
+    fn plain_payload_can_contain_multiple_variable_item_packets() {
+        let mut reader = D2GSReader::new();
+        let payload = [
+            0x9C, 0x0E, 0x14, 0x10, 0xEB, 0xAA, 0xCC, 0x81, 0x10, 0x00, 0xA2, 0x00, 0x65, 0x08,
+            0x02, 0x80, 0x06, 0x17, 0x03, 0x02, 0x9C, 0x0E, 0x14, 0x10, 0x75, 0x35, 0xE6, 0xD0,
+            0x10, 0x00, 0xA2, 0x00, 0x65, 0x08, 0x04, 0x80, 0x06, 0x17, 0x03, 0x02,
+        ];
+
+        reader.read(&payload);
+
+        assert_eq!(drain_packet_lengths(&mut reader), vec![20, 20]);
+    }
+
+    #[test]
+    fn split_payload_buffers_incomplete_trailing_packet() {
+        let mut reader = D2GSReader::new();
+
+        reader.read(&[0x07, 0x70, 0x04]);
+        assert!(reader.next().is_none());
+
+        reader.read(&[0x78, 0x03, 0x01]);
+        let packet = reader.next().expect("packet should complete");
+        assert_eq!(packet.data, vec![0x07, 0x70, 0x04, 0x78, 0x03, 0x01]);
+        assert!(reader.next().is_none());
+    }
 }

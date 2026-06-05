@@ -552,6 +552,29 @@ mod tests {
     }
 
     #[test]
+    fn process_d2gs_payload_splits_concatenated_server_packets() {
+        let mut connection = Connection::new();
+        let mut state = GameState::default();
+        let payload = [
+            0x07, 0x70, 0x04, 0x78, 0x03, 0x01, 0x07, 0x78, 0x04, 0x78, 0x03, 0x01, 0x07, 0x80,
+            0x04, 0x78, 0x03, 0x01,
+        ];
+
+        let events = connection.process_d2gs_payload(&payload, &mut state);
+
+        assert_eq!(events.len(), 3);
+        assert_eq!(state.map().revealed_tiles.len(), 3);
+        assert!(events.iter().all(|event| matches!(
+            event,
+            ConnectionEvent::ServerMessage {
+                message: ServerMessage::MapReveal { .. },
+                applied: true,
+                ..
+            }
+        )));
+    }
+
+    #[test]
     fn process_d2gs_payload_reports_parse_errors() {
         let mut connection = Connection::new();
         let mut state = GameState::default();
