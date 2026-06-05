@@ -117,6 +117,10 @@ The current suite has 62 unit tests.
   promiscuous mode. The library only needs local client/server traffic for
   Diablo II helpers, and promiscuous membership can fail with `ENODEV` on some
   Linux wireless drivers even when the interface exists.
+- Fixed live LoD capture direction handling so only server-to-client packets
+  with source port `4000` enter the D2GS server-message reader. Client-to-server
+  packets with destination port `4000` use a different packet space and were
+  causing false server packet length mismatches when parsed as D2GS messages.
 - Reviewed `blacha/diablo2/packages/map` at commit `45c91b3`. The package is
   MIT licensed and mostly wraps a C/Wine Diablo II 1.13c map-generation binary
   with a Node server, cache, renderer, and MPQ-backed name enrichment.

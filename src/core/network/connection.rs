@@ -42,14 +42,17 @@ const D2R_BNET_PORT: u16 = 1119;
 /// already-decoded plaintext fixtures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CapturedTransport {
-    LegacyD2gs,
+    LegacyD2gsServerToClient,
+    LegacyD2gsClientToServer,
     D2rEncryptedOrUnknown,
     Ignored,
 }
 
 fn classify_transport(source_port: u16, destination_port: u16) -> CapturedTransport {
-    if source_port == LEGACY_D2GS_PORT || destination_port == LEGACY_D2GS_PORT {
-        CapturedTransport::LegacyD2gs
+    if source_port == LEGACY_D2GS_PORT {
+        CapturedTransport::LegacyD2gsServerToClient
+    } else if destination_port == LEGACY_D2GS_PORT {
+        CapturedTransport::LegacyD2gsClientToServer
     } else if source_port == D2R_BNET_PORT || destination_port == D2R_BNET_PORT {
         CapturedTransport::D2rEncryptedOrUnknown
     } else {
@@ -98,7 +101,8 @@ impl ConnectionEvent {
 //     6120 UDP for D2R (PC)
 // D2GS:  The diablo2 game server protocol
 //   Ports:
-//     4000 TCP for legacy Classic/LoD plaintext D2GS
+//     source 4000 TCP for legacy Classic/LoD plaintext D2GS server messages
+//     destination 4000 TCP for client action messages, not parsed as D2GS server messages yet
 //     1119 TCP for D2R/modern Battle.net transport; not legacy D2GS framing
 
 pub struct Connection {
@@ -259,9 +263,10 @@ impl Connection {
             //    return
             //}
             match classify_transport(udp.get_source(), udp.get_destination()) {
-                CapturedTransport::LegacyD2gs => {
+                CapturedTransport::LegacyD2gsServerToClient => {
                     self.read_d2gs_payload(udp.payload(), game_state, on_event)
                 }
+                CapturedTransport::LegacyD2gsClientToServer => {}
                 CapturedTransport::D2rEncryptedOrUnknown | CapturedTransport::Ignored => {}
             }
             // println!(
@@ -296,9 +301,10 @@ impl Connection {
             //    return
             //}
             match classify_transport(tcp.get_source(), tcp.get_destination()) {
-                CapturedTransport::LegacyD2gs => {
+                CapturedTransport::LegacyD2gsServerToClient => {
                     self.read_d2gs_payload(tcp.payload(), game_state, on_event)
                 }
+                CapturedTransport::LegacyD2gsClientToServer => {}
                 CapturedTransport::D2rEncryptedOrUnknown | CapturedTransport::Ignored => {}
             }
             // println!(
@@ -485,14 +491,18 @@ mod tests {
     use crate::ServerMessage;
 
     #[test]
-    fn classifies_legacy_d2gs_by_source_or_destination_port() {
+    fn classifies_legacy_d2gs_server_messages_by_source_port() {
         assert_eq!(
             classify_transport(LEGACY_D2GS_PORT, 51_000),
-            CapturedTransport::LegacyD2gs
+            CapturedTransport::LegacyD2gsServerToClient
         );
+    }
+
+    #[test]
+    fn classifies_legacy_d2gs_client_messages_without_server_parsing() {
         assert_eq!(
             classify_transport(51_000, LEGACY_D2GS_PORT),
-            CapturedTransport::LegacyD2gs
+            CapturedTransport::LegacyD2gsClientToServer
         );
     }
 
