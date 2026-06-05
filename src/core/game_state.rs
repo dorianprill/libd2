@@ -356,6 +356,26 @@ impl Update for GameState {
                 y: tile_y,
                 area_id,
             }),
+            ServerMessage::AssignLevelWarp {
+                unit_type,
+                unit_id,
+                warp_class_id,
+                warp_x,
+                warp_y,
+            } => {
+                self.objects.insert(
+                    unit_id,
+                    WorldObject::new(
+                        unit_id,
+                        unit_type,
+                        warp_class_id as u16,
+                        Coordinate::new(warp_x, warp_y),
+                        0,
+                        0,
+                    ),
+                );
+                true
+            }
             ServerMessage::GameHandshake { unit_type, unit_id } => {
                 if unit_type == 0 {
                     self.local_player_id = Some(unit_id);
@@ -698,6 +718,25 @@ mod tests {
             unit_id: 99,
         }));
         assert!(state.object(99).is_none());
+    }
+
+    #[test]
+    fn level_warp_packet_is_tracked_as_world_object() {
+        let mut state = GameState::default();
+
+        assert!(state.update(ServerMessage::AssignLevelWarp {
+            unit_type: 2,
+            unit_id: 77,
+            warp_class_id: 5,
+            warp_x: 1200,
+            warp_y: 1300,
+        }));
+
+        let object = state.object(77).expect("level warp exists");
+        assert_eq!(object.object_type(), 2);
+        assert_eq!(object.class_id(), 5);
+        assert_eq!(object.location().x(), 1200);
+        assert_eq!(object.location().y(), 1300);
     }
 
     #[test]

@@ -121,6 +121,8 @@ The current suite has 62 unit tests.
   with source port `4000` enter the D2GS server-message reader. Client-to-server
   packets with destination port `4000` use a different packet space and were
   causing false server packet length mismatches when parsed as D2GS messages.
+- Applied `0x09 AssignLevelWarp` packets to `GameState` as world objects so UI
+  consumers can display packet-observed entrance/exit markers.
 - Reviewed `blacha/diablo2/packages/map` at commit `45c91b3`. The package is
   MIT licensed and mostly wraps a C/Wine Diablo II 1.13c map-generation binary
   with a Node server, cache, renderer, and MPQ-backed name enrichment.

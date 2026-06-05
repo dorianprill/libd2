@@ -29,7 +29,7 @@ This list describes the current code, not the final project goal.
    - [x] Tracks game type, difficulty, locale, expansion/ladder/hardcore flags, local player id, and active act/map metadata.
    - [x] Tracks players for assignment, join/leave, movement, level, simple local stats, and experience updates.
    - [x] Tracks NPCs/monsters for assignment, movement/action/attack/stop, state, life percent, heal, and death/removal.
-   - [x] Tracks world objects for assignment and removal.
+   - [x] Tracks world objects for assignment/removal and level-warp entrance markers from `0x09`.
    - [x] Tracks map reveal/hide tiles from packets.
    - [x] Tracks item unit ids, world/unit ownership, raw item action bitstreams, typed action/category/container ids, flags, item-data version, destination/placement, item code, gold amount, used/open sockets, item level, quality, graphic/color ids, quality-specific ids, runeword metadata, armor defense, and durability from `0x9C`/`0x9D` where the packet bitstream contains those fields.
    - [ ] Full item stat lists, resolved item names/properties, complete ground/inventory/stash/cube/belt semantics, missiles, mercenaries, party/hostility, buffs/states, quests, and derived event notifications are not complete.
