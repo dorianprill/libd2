@@ -126,6 +126,15 @@ impl ItemStatUpdate {
 #[derive(Debug)]
 pub struct GameState {
     pub(crate) players: HashMap<u32, Player>,
+    /// Packet id aliases for the same character.
+    ///
+    /// Legacy D2GS traffic can describe players through roster packets and
+    /// through in-world unit assignment packets. Public packet tables name both
+    /// values as player/unit GUIDs, but live captures can expose them through
+    /// different packet paths before the full identity has converged. Keeping a
+    /// small alias table lets `0x5C PlayerLeft`, `0x0A RemoveObject`, party-map
+    /// pulses, and movement/stat updates all hit the same canonical [`Player`].
+    pub(crate) player_aliases: HashMap<u32, u32>,
     pub(crate) npcs: HashMap<u32, Npc>,
     pub(crate) objects: HashMap<u32, WorldObject>,
     pub(crate) items: HashMap<u32, Item>,
@@ -144,6 +153,7 @@ impl GameState {
     pub fn new(game_type: GameServerType, difficulty: Difficulty, locale: Locale) -> Self {
         Self {
             players: HashMap::with_capacity(8),
+            player_aliases: HashMap::with_capacity(8),
             npcs: HashMap::with_capacity(1024),
             objects: HashMap::with_capacity(256),
             items: HashMap::with_capacity(256),
@@ -169,7 +179,7 @@ impl GameState {
     }
 
     pub fn player(&self, id: u32) -> Option<&Player> {
-        self.players.get(&id)
+        self.players.get(&self.resolve_player_id(id))
     }
 
     pub fn npcs(&self) -> &HashMap<u32, Npc> {
@@ -205,7 +215,7 @@ impl GameState {
     }
 
     pub fn local_player_id(&self) -> Option<u32> {
-        self.local_player_id
+        self.local_player_id.map(|id| self.resolve_player_id(id))
     }
 
     pub fn difficulty(&self) -> Difficulty {
@@ -232,14 +242,8 @@ impl GameState {
         self.is_hardcore
     }
 
-    fn set_local_player_if_unknown(&mut self, unit_id: u32) {
-        if self.local_player_id.is_none() {
-            self.local_player_id = Some(unit_id);
-        }
-    }
-
     fn local_player_mut(&mut self) -> Option<&mut Player> {
-        let id = self.local_player_id?;
+        let id = self.resolve_player_id(self.local_player_id?);
         self.players.get_mut(&id)
     }
 
@@ -260,6 +264,7 @@ impl GameState {
     }
 
     fn set_player_stat(&mut self, unit_id: u32, stat: u16, amount: u32) -> bool {
+        let unit_id = self.resolve_player_id(unit_id);
         let Some(player) = self.players.get_mut(&unit_id) else {
             return false;
         };
@@ -297,18 +302,32 @@ impl GameState {
         location: Coordinate,
     ) {
         let name = name.into();
-        self.set_local_player_if_unknown(unit_id);
-        self.players
-            .entry(unit_id)
-            .and_modify(|player| {
+        let canonical_id = self.resolve_player_id(unit_id);
+        if let Some(player) = self.players.get_mut(&canonical_id) {
+            player.set_class(class);
+            player.set_name(name);
+            player.set_location(location);
+            return;
+        }
+
+        self.player_aliases.remove(&unit_id);
+
+        if let Some(existing_id) = self.find_player_id_by_identity(class, &name) {
+            self.link_player_alias(unit_id, existing_id);
+            if let Some(player) = self.players.get_mut(&existing_id) {
                 player.set_class(class);
-                player.set_name(name.clone());
+                player.set_name(name);
                 player.set_location(location);
-            })
-            .or_insert_with(|| Player::new(unit_id, class, name, location));
+            }
+            return;
+        }
+
+        self.players
+            .insert(unit_id, Player::new(unit_id, class, name, location));
     }
 
     fn move_player(&mut self, unit_id: u32, location: Coordinate) -> bool {
+        let unit_id = self.resolve_player_id(unit_id);
         let Some(player) = self.players.get_mut(&unit_id) else {
             return false;
         };
@@ -341,7 +360,7 @@ impl GameState {
 
     fn remove_unit(&mut self, unit_type: u8, unit_id: u32) -> bool {
         match unit_type {
-            0x00 => self.players.remove(&unit_id).is_some(),
+            0x00 => self.remove_player(unit_id),
             0x01 => self.npcs.remove(&unit_id).is_some(),
             0x02 | 0x05 => self.objects.remove(&unit_id).is_some(),
             0x04 => self.items.remove(&unit_id).is_some(),
@@ -363,6 +382,57 @@ impl GameState {
         object.set_targetable(is_targetable);
         object.set_state(unit_state);
         true
+    }
+
+    fn resolve_player_id(&self, unit_id: u32) -> u32 {
+        let mut current = unit_id;
+        for _ in 0..8 {
+            let Some(next) = self.player_aliases.get(&current).copied() else {
+                break;
+            };
+            if next == current {
+                break;
+            }
+            current = next;
+        }
+        current
+    }
+
+    fn find_player_id_by_identity(&self, class: CharacterClass, name: &str) -> Option<u32> {
+        if name.is_empty() {
+            return None;
+        }
+
+        self.players.iter().find_map(|(id, player)| {
+            (player.class() == class && player.name().eq_ignore_ascii_case(name)).then_some(*id)
+        })
+    }
+
+    fn link_player_alias(&mut self, alias_id: u32, canonical_id: u32) {
+        if alias_id != canonical_id {
+            self.player_aliases.insert(alias_id, canonical_id);
+        }
+    }
+
+    fn remove_player(&mut self, unit_id: u32) -> bool {
+        let canonical_id = self.resolve_player_id(unit_id);
+        let local_removed = self.local_player_id.is_some_and(|local_id| {
+            local_id == unit_id || self.resolve_player_id(local_id) == canonical_id
+        });
+        let removed = self.players.remove(&canonical_id).is_some();
+
+        self.player_aliases.retain(|alias_id, target_id| {
+            *alias_id != unit_id
+                && *alias_id != canonical_id
+                && *target_id != unit_id
+                && *target_id != canonical_id
+        });
+
+        if local_removed {
+            self.local_player_id = None;
+        }
+
+        removed
     }
 }
 
@@ -510,18 +580,13 @@ impl Update for GameState {
                     fixed_c_string(&character_name),
                     Coordinate::new(0, 0),
                 );
+                let player_id = self.resolve_player_id(player_id);
                 if let Some(player) = self.players.get_mut(&player_id) {
                     player.set_level(character_level as u32);
                 }
                 true
             }
-            ServerMessage::PlayerLeft { player_id } => {
-                self.players.remove(&player_id);
-                if self.local_player_id == Some(player_id) {
-                    self.local_player_id = None;
-                }
-                true
-            }
+            ServerMessage::PlayerLeft { player_id } => self.remove_player(player_id),
             ServerMessage::PlayerMapUpdate {
                 player_id,
                 player_x,
@@ -846,7 +911,7 @@ mod tests {
     }
 
     #[test]
-    fn assign_player_packet_creates_local_player_memory() {
+    fn assign_player_packet_creates_player_memory() {
         let mut state = GameState::default();
         let mut packet = vec![0x59, 0x04, 0x03, 0x02, 0x01, 0x03];
         packet.extend_from_slice(b"Rusty\0\0\0\0\0\0\0\0\0\0\0");
@@ -859,7 +924,7 @@ mod tests {
 
         let player = state.player(0x0102_0304).expect("player exists");
         assert!(applied);
-        assert_eq!(state.local_player_id(), Some(0x0102_0304));
+        assert_eq!(state.local_player_id(), None);
         assert_eq!(player.class(), CharacterClass::Paladin);
         assert_eq!(player.name(), "Rusty");
         assert_eq!(player.location().x(), 1234);
@@ -916,6 +981,112 @@ mod tests {
     }
 
     #[test]
+    fn player_left_removes_coalesced_roster_and_assignment_ids() {
+        let mut state = GameState::default();
+
+        assert!(state.update(ServerMessage::PlayerJoined {
+            packet_length: 36,
+            player_id: 0x1000,
+            character_class: 1,
+            character_name: name16("Alias"),
+            character_level: 42,
+            party_id: 0,
+            unknown: [0; 8],
+        }));
+        assert!(state.update(ServerMessage::AssignPlayer {
+            unit_id: 0x2000,
+            class: 1,
+            szname: name16("Alias"),
+            x: 5200,
+            y: 5100,
+        }));
+
+        assert_eq!(state.players().len(), 1);
+        assert!(state.player(0x1000).is_some());
+        assert!(state.player(0x2000).is_some());
+
+        assert!(state.update(ServerMessage::PlayerLeft { player_id: 0x1000 }));
+        assert!(state.players().is_empty());
+        assert!(state.player(0x1000).is_none());
+        assert!(state.player(0x2000).is_none());
+    }
+
+    #[test]
+    fn remove_player_unit_resolves_coalesced_assignment_id() {
+        let mut state = GameState::default();
+
+        assert!(state.update(ServerMessage::PlayerJoined {
+            packet_length: 36,
+            player_id: 0x1000,
+            character_class: 2,
+            character_name: name16("UnitAlias"),
+            character_level: 12,
+            party_id: 0,
+            unknown: [0; 8],
+        }));
+        assert!(state.update(ServerMessage::AssignPlayer {
+            unit_id: 0x2000,
+            class: 2,
+            szname: name16("UnitAlias"),
+            x: 5210,
+            y: 5110,
+        }));
+
+        assert!(state.update(ServerMessage::RemoveObject {
+            unit_type: 0,
+            unit_id: 0x2000,
+        }));
+        assert!(state.players().is_empty());
+    }
+
+    #[test]
+    fn local_player_id_resolves_through_player_aliases() {
+        let mut state = GameState::default();
+
+        assert!(state.update(ServerMessage::PlayerJoined {
+            packet_length: 36,
+            player_id: 0x1000,
+            character_class: 3,
+            character_name: name16("LocalAlias"),
+            character_level: 1,
+            party_id: 0,
+            unknown: [0; 8],
+        }));
+        assert!(state.update(ServerMessage::AssignPlayer {
+            unit_id: 0x2000,
+            class: 3,
+            szname: name16("LocalAlias"),
+            x: 5000,
+            y: 5001,
+        }));
+        assert!(state.update(ServerMessage::GameHandshake {
+            unit_type: 0,
+            unit_id: 0x2000,
+        }));
+
+        assert_eq!(state.local_player_id(), Some(0x1000));
+        assert!(state.update(ServerMessage::LifeManaUpdate {
+            bitfield: status_bitfield::<12>(&[
+                (1, 15),
+                (2, 15),
+                (3, 15),
+                (5002, 16),
+                (5003, 16),
+                (0, 8),
+                (0, 8),
+            ]),
+        }));
+        assert_eq!(
+            state
+                .player(0x1000)
+                .expect("canonical player")
+                .location()
+                .x(),
+            5002
+        );
+    }
+
+    #[test]
     fn life_mana_update_packets_update_local_vitals_and_position() {
         let mut state = GameState::default();
         state.update(ServerMessage::AssignPlayer {
@@ -925,6 +1096,7 @@ mod tests {
             x: 10,
             y: 20,
         });
+        mark_local(&mut state, 7);
 
         let bitfield = status_bitfield::<12>(&[
             (1234, 15),
@@ -963,6 +1135,7 @@ mod tests {
             x: 10,
             y: 20,
         });
+        mark_local(&mut state, 7);
 
         let packed_bits = status_bitfield::<14>(&[
             (3000, 15),
@@ -999,6 +1172,7 @@ mod tests {
             x: 10,
             y: 20,
         });
+        mark_local(&mut state, 7);
         state.update(ServerMessage::LifeManaUpdate {
             bitfield: status_bitfield::<12>(&[
                 (900, 15),
@@ -1037,6 +1211,7 @@ mod tests {
             x: 10,
             y: 20,
         });
+        mark_local(&mut state, 7);
 
         let bitfield = status_bitfield::<8>(&[(123, 15), (111, 16), (222, 16), (3, 8), (4, 8)]);
 
@@ -1343,6 +1518,7 @@ mod tests {
             x: 10,
             y: 11,
         });
+        mark_local(&mut state, 7);
 
         assert!(state.update(ServerMessage::SetAttributeU16 {
             attribute: UnitStat::Strength as u8,
@@ -1354,6 +1530,21 @@ mod tests {
         let player = state.player(7).expect("player exists");
         assert_eq!(player.stat(UnitStat::Strength as u16), Some(50));
         assert_eq!(player.stat(UnitStat::Experience as u16), Some(1000));
+    }
+
+    fn mark_local(state: &mut GameState, unit_id: u32) {
+        assert!(state.update(ServerMessage::GameHandshake {
+            unit_type: 0,
+            unit_id,
+        }));
+    }
+
+    fn name16(name: &str) -> [u8; 16] {
+        let mut bytes = [0; 16];
+        let name = name.as_bytes();
+        let len = name.len().min(bytes.len());
+        bytes[..len].copy_from_slice(&name[..len]);
+        bytes
     }
 
     fn item_bitstream(

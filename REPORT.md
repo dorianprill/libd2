@@ -62,6 +62,13 @@ The current suite has 87 unit tests.
   for the parsed packet subset.
 - Added indexed in-memory state for players, NPCs, world objects, items, map
   metadata, revealed map tiles, local player id, mode flags, and player stats.
+- Added player id alias coalescing for live D2GS roster-vs-unit assignment
+  bursts. `0x5C PlayerLeft` and unit-type `0x00` removals now clear the
+  canonical player even when leave/removal packets reference a different
+  observed id for the same character name/class.
+- Stopped treating the first `0x59 AssignPlayer` as local-player proof; local
+  identity is now sourced from `0x0B GameHandshake` and resolved through player
+  aliases.
 - Extended `ServerMessage::parse` for world objects, player join, NPC
   movement/state/action/attack/stop/heal, and variable-length NPC assignment.
 - Wired `Connection::listen(&mut GameState)` so live D2GS packets are decoded,

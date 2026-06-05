@@ -89,6 +89,7 @@ mod tests {
 
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0], ConnectionEvent::ServerMessage { .. }));
-        assert_eq!(client.game_state().local_player_id(), Some(0x0102_0304));
+        assert!(client.game_state().player(0x0102_0304).is_some());
+        assert_eq!(client.game_state().local_player_id(), None);
     }
 }

@@ -535,7 +535,8 @@ mod tests {
         let events = connection.process_d2gs_payload(&packet, &mut state);
 
         assert_eq!(events.len(), 1);
-        assert_eq!(state.local_player_id(), Some(0x0102_0304));
+        assert!(state.player(0x0102_0304).is_some());
+        assert_eq!(state.local_player_id(), None);
         match &events[0] {
             ConnectionEvent::ServerMessage {
                 packet,
