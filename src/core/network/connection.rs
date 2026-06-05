@@ -185,8 +185,16 @@ impl Connection {
             println!("Connection: must init() before listen()");
             return;
         }
+        let capture_config = datalink::Config {
+            // We only need packets addressed to/from the local Diablo II client.
+            // Promiscuous mode is unnecessary for that use case and can fail on
+            // some Linux wireless drivers with ENODEV during PACKET_ADD_MEMBERSHIP.
+            promiscuous: false,
+            ..Default::default()
+        };
+
         // Create a channel to receive on
-        let (_, mut rx_channel) = match datalink::channel(&self.interface, Default::default()) {
+        let (_, mut rx_channel) = match datalink::channel(&self.interface, capture_config) {
             Ok(Ethernet(tx, rx_channel)) => (tx, rx_channel),
             Ok(_) => panic!("{}", "unhandled channel type: {}"),
             Err(e) => panic!("unable to create channel: {}", e),

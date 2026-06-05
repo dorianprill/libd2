@@ -113,6 +113,10 @@ The current suite has 62 unit tests.
 - Added MPQ tests using Blaine's hash vectors, decryption-key vectors,
   encryption-table prefix, and a direct decrypt fixture prefix from the MPQ
   package tests.
+- Changed live packet capture to open pnet datalink channels without
+  promiscuous mode. The library only needs local client/server traffic for
+  Diablo II helpers, and promiscuous membership can fail with `ENODEV` on some
+  Linux wireless drivers even when the interface exists.
 - Reviewed `blacha/diablo2/packages/map` at commit `45c91b3`. The package is
   MIT licensed and mostly wraps a C/Wine Diablo II 1.13c map-generation binary
   with a Node server, cache, renderer, and MPQ-backed name enrichment.
