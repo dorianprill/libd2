@@ -63,9 +63,13 @@ The current suite has 87 unit tests.
 - Added indexed in-memory state for players, NPCs, world objects, items, map
   metadata, revealed map tiles, local player id, mode flags, and player stats.
 - Added player id alias coalescing for live D2GS roster-vs-unit assignment
-  bursts. `0x5C PlayerLeft` and unit-type `0x00` removals now clear the
-  canonical player even when leave/removal packets reference a different
-  observed id for the same character name/class.
+  bursts. `0x5C PlayerLeft` now removes the canonical player even when the
+  leave packet references a different observed id for the same character
+  name/class.
+- Split player roster membership from current world-location visibility:
+  unit-type `0x00` removals now clear the player's world marker without
+  removing the roster row, matching live LoD captures where remote players can
+  leave the local visible area while staying in game.
 - Stopped treating the first `0x59 AssignPlayer` as local-player proof; local
   identity is now sourced from `0x0B GameHandshake` and resolved through player
   aliases.
@@ -405,7 +409,7 @@ MPQ bytes
 cargo test
 ```
 
-Result: passed. 87 tests.
+Result: passed. 92 tests.
 
 ```text
 cargo fmt --check

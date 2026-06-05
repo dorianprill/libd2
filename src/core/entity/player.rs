@@ -121,6 +121,7 @@ pub struct Player {
     stats: HashMap<u16, u32>,
     vitals: Option<PlayerVitals>,
     movement: Option<PlayerMovement>,
+    world_location_known: bool,
     // TODO
     // stash:       Container;
     // cube:        Container;
@@ -147,6 +148,20 @@ impl Player {
             stats: HashMap::new(),
             vitals: None,
             movement: None,
+            world_location_known: true,
+        }
+    }
+
+    /// Creates a roster-only player entry without a current world position.
+    ///
+    /// Legacy D2GS distinguishes the game roster (`0x5B PlayerJoined`) from
+    /// in-world unit assignment (`0x59 AssignPlayer`). A player can stay in the
+    /// game after their unit is removed from the local client's visible area, so
+    /// roster entries must be representable without a map marker.
+    pub fn new_roster(id: u32, class: CharacterClass, name: impl Into<String>) -> Self {
+        Self {
+            world_location_known: false,
+            ..Self::new(id, class, name, Coordinate::new(0, 0))
         }
     }
 
@@ -168,6 +183,22 @@ impl Player {
 
     pub fn set_location(&mut self, location: Coordinate) {
         self.location = location;
+        self.world_location_known = true;
+    }
+
+    /// Returns whether the current `location` should be rendered as an in-world
+    /// marker.
+    ///
+    /// `0x0A RemoveObject` with unit type `0` can mean that a remote player unit
+    /// left the local visible area, not that the player left the game. In that
+    /// case the player remains in the roster but this flag is cleared until a
+    /// later assignment, movement, or party automap packet refreshes a position.
+    pub fn world_location_known(&self) -> bool {
+        self.world_location_known
+    }
+
+    pub fn clear_world_location(&mut self) {
+        self.world_location_known = false;
     }
 
     pub fn vitals(&self) -> Option<PlayerVitals> {
@@ -195,6 +226,7 @@ impl Player {
     pub fn set_movement(&mut self, movement: PlayerMovement) {
         self.location = movement.location();
         self.movement = Some(movement);
+        self.world_location_known = true;
     }
 
     pub fn has_mercenary(&self) -> bool {

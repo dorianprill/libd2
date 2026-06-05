@@ -260,7 +260,8 @@ coverage.
 `GameState` currently stores indexed runtime memory:
 
 - players by canonical packet id, with a small alias table for roster ids vs
-  in-world unit assignment ids observed for the same character
+  in-world unit assignment ids observed for the same character, plus a separate
+  marker for whether the current world location is known
 - NPCs by unit id
 - world objects by unit id
 - items by unit id, including latest owner, raw item action bits, typed
@@ -275,16 +276,21 @@ coverage.
 It implements the `Update` trait with `&mut self` and mutates state for the
 currently parsed packet subset: game flags, act load/unload, map reveal/hide,
 player assignment/movement/join/left, player id alias coalescing, local-player
-HP/mana/stamina/movement verification, world object assignment/removal/state metadata, NPC
-assignment/movement/state/heal/death, simple local player stat/experience
-updates, and raw item-stat update preservation. Item action packets currently
-upsert item owner and decoded packet-time item state; fixed `0x7D` packets
-update the matching item's raw state flags by GUID.
+HP/mana/stamina/movement verification, world object assignment/removal/state
+metadata, NPC assignment/movement/state/heal/death, simple local player
+stat/experience updates, and raw item-stat update preservation. Item action
+packets currently upsert item owner and decoded packet-time item state; fixed
+`0x7D` packets update the matching item's raw state flags by GUID.
 
 Local player identity is taken from `0x0B GameHandshake`, then resolved through
 the same alias table. `0x59 AssignPlayer` creates or refreshes player memory but
 does not guess local identity by itself. This avoids marking the first observed
 remote roster entry as local during join bursts.
+
+Player roster membership and current map visibility are intentionally separate.
+`0x5C PlayerLeft` removes a player from the roster. `0x0A RemoveObject` with
+unit type `0` clears only the player's current world-location flag, because live
+LoD captures use it when a remote player unit leaves the local visible area.
 
 ### Entities and Objects
 

@@ -294,7 +294,7 @@ impl GameState {
         true
     }
 
-    fn upsert_player(
+    fn upsert_assigned_player(
         &mut self,
         unit_id: u32,
         class: CharacterClass,
@@ -324,6 +324,39 @@ impl GameState {
 
         self.players
             .insert(unit_id, Player::new(unit_id, class, name, location));
+    }
+
+    fn upsert_roster_player(
+        &mut self,
+        player_id: u32,
+        class: CharacterClass,
+        name: impl Into<String>,
+        level: u32,
+    ) {
+        let name = name.into();
+        let canonical_id = self.resolve_player_id(player_id);
+        if let Some(player) = self.players.get_mut(&canonical_id) {
+            player.set_class(class);
+            player.set_name(name);
+            player.set_level(level);
+            return;
+        }
+
+        self.player_aliases.remove(&player_id);
+
+        if let Some(existing_id) = self.find_player_id_by_identity(class, &name) {
+            self.link_player_alias(player_id, existing_id);
+            if let Some(player) = self.players.get_mut(&existing_id) {
+                player.set_class(class);
+                player.set_name(name);
+                player.set_level(level);
+            }
+            return;
+        }
+
+        let mut player = Player::new_roster(player_id, class, name);
+        player.set_level(level);
+        self.players.insert(player_id, player);
     }
 
     fn move_player(&mut self, unit_id: u32, location: Coordinate) -> bool {
@@ -360,7 +393,7 @@ impl GameState {
 
     fn remove_unit(&mut self, unit_type: u8, unit_id: u32) -> bool {
         match unit_type {
-            0x00 => self.remove_player(unit_id),
+            0x00 => self.clear_player_world_location(unit_id),
             0x01 => self.npcs.remove(&unit_id).is_some(),
             0x02 | 0x05 => self.objects.remove(&unit_id).is_some(),
             0x04 => self.items.remove(&unit_id).is_some(),
@@ -433,6 +466,15 @@ impl GameState {
         }
 
         removed
+    }
+
+    fn clear_player_world_location(&mut self, unit_id: u32) -> bool {
+        let canonical_id = self.resolve_player_id(unit_id);
+        let Some(player) = self.players.get_mut(&canonical_id) else {
+            return false;
+        };
+        player.clear_world_location();
+        true
     }
 }
 
@@ -538,7 +580,7 @@ impl Update for GameState {
                 let Some(class) = CharacterClass::from_id(class) else {
                     return false;
                 };
-                self.upsert_player(
+                self.upsert_assigned_player(
                     unit_id,
                     class,
                     fixed_c_string(&szname),
@@ -574,16 +616,12 @@ impl Update for GameState {
                 let Some(class) = CharacterClass::from_id(character_class) else {
                     return false;
                 };
-                self.upsert_player(
+                self.upsert_roster_player(
                     player_id,
                     class,
                     fixed_c_string(&character_name),
-                    Coordinate::new(0, 0),
+                    character_level as u32,
                 );
-                let player_id = self.resolve_player_id(player_id);
-                if let Some(player) = self.players.get_mut(&player_id) {
-                    player.set_level(character_level as u32);
-                }
                 true
             }
             ServerMessage::PlayerLeft { player_id } => self.remove_player(player_id),
@@ -929,6 +967,7 @@ mod tests {
         assert_eq!(player.name(), "Rusty");
         assert_eq!(player.location().x(), 1234);
         assert_eq!(player.location().y(), 5678);
+        assert!(player.world_location_known());
     }
 
     #[test]
@@ -956,6 +995,7 @@ mod tests {
         let player = state.player(7).expect("player exists");
         assert_eq!(player.location().x(), 18);
         assert_eq!(player.location().y(), 19);
+        assert!(player.world_location_known());
     }
 
     #[test]
@@ -1012,7 +1052,7 @@ mod tests {
     }
 
     #[test]
-    fn remove_player_unit_resolves_coalesced_assignment_id() {
+    fn remove_player_unit_clears_world_marker_but_keeps_roster() {
         let mut state = GameState::default();
 
         assert!(state.update(ServerMessage::PlayerJoined {
@@ -1036,7 +1076,43 @@ mod tests {
             unit_type: 0,
             unit_id: 0x2000,
         }));
+        assert_eq!(state.players().len(), 1);
+        let player = state.player(0x1000).expect("player remains in roster");
+        assert_eq!(player.location().x(), 5210);
+        assert_eq!(player.location().y(), 5110);
+        assert!(!player.world_location_known());
+
+        assert!(state.update(ServerMessage::PlayerLeft { player_id: 0x1000 }));
         assert!(state.players().is_empty());
+    }
+
+    #[test]
+    fn roster_update_after_assignment_keeps_world_position() {
+        let mut state = GameState::default();
+
+        assert!(state.update(ServerMessage::AssignPlayer {
+            unit_id: 0x2000,
+            class: 2,
+            szname: name16("LateRoster"),
+            x: 5210,
+            y: 5110,
+        }));
+        assert!(state.update(ServerMessage::PlayerJoined {
+            packet_length: 36,
+            player_id: 0x1000,
+            character_class: 2,
+            character_name: name16("LateRoster"),
+            character_level: 12,
+            party_id: 0,
+            unknown: [0; 8],
+        }));
+
+        assert_eq!(state.players().len(), 1);
+        let player = state.player(0x1000).expect("roster alias resolves");
+        assert_eq!(player.location().x(), 5210);
+        assert_eq!(player.location().y(), 5110);
+        assert_eq!(player.level(), 12);
+        assert!(player.world_location_known());
     }
 
     #[test]

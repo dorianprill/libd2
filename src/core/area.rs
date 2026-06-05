@@ -288,6 +288,32 @@ impl std::fmt::Display for Area {
     }
 }
 
+impl Area {
+    /// Converts a numeric Diablo II level id into an [`Area`].
+    ///
+    /// The legacy packet protocol and the external map generator both use the
+    /// game's level ids directly. The enum is intentionally declared with the
+    /// same contiguous `repr(u16)` values, so this helper gives callers a typed
+    /// boundary before they build map-generation requests.
+    pub fn from_id(id: u16) -> Option<Self> {
+        if id <= Self::UberTristram as u16 {
+            // SAFETY: `Area` is `repr(u16)` and declares every value from 0
+            // through `UberTristram` without gaps.
+            Some(unsafe { std::mem::transmute::<u16, Self>(id) })
+        } else {
+            None
+        }
+    }
+}
+
+impl TryFrom<u16> for Area {
+    type Error = ();
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        Self::from_id(value).ok_or(())
+    }
+}
+
 #[allow(dead_code)]
 const ACT1_AREAS: &'static [&'static str] = &[
     "Rogue Encampment",
@@ -443,3 +469,16 @@ const ACT5_AREAS: &'static [&'static str] = &[
     "Furnace Of Pain",
     "Uber Tristram",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::Area;
+
+    #[test]
+    fn area_from_id_accepts_known_contiguous_level_ids() {
+        assert_eq!(Area::from_id(0), Some(Area::Unknown));
+        assert_eq!(Area::from_id(74), Some(Area::ArcaneSanctuary));
+        assert_eq!(Area::from_id(136), Some(Area::UberTristram));
+        assert_eq!(Area::from_id(137), None);
+    }
+}
