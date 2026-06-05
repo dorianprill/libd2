@@ -1107,7 +1107,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_fixture_item_code_quality_and_ground_location() {
+    fn lod_1_14d_assumed_parses_fixture_item_code_quality_and_ground_location() {
+        // Captured-style bytes recorded before fixture metadata existed; assume LoD 1.14d.
         let packet = decode_hex("9c021e056800000010008000658c24c2bfe2664c0e04d02100111e3cf80f");
         let item = Item::from_world_packet(
             104,
@@ -1128,7 +1129,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_fixture_armor_defense_durability_and_sockets() {
+    fn lod_1_14d_assumed_parses_fixture_armor_defense_durability_and_sockets() {
+        // Captured-style bytes recorded before fixture metadata existed; assume LoD 1.14d.
         let packet = decode_hex("9d052001290000000001000000100880006510a05a37c60602a9001c120ef21f");
         let item = Item::from_owned_packet(
             0x29,

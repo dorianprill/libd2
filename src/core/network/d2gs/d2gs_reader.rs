@@ -284,8 +284,9 @@ mod tests {
     }
 
     #[test]
-    fn plain_payload_can_contain_multiple_map_reveals() {
+    fn lod_1_14d_assumed_plain_payload_can_contain_multiple_map_reveals() {
         let mut reader = D2GSReader::new();
+        // Live-shaped bytes captured before fixture metadata existed; assume LoD 1.14d.
         let payload = [
             0x07, 0x70, 0x04, 0x78, 0x03, 0x01, 0x07, 0x78, 0x04, 0x78, 0x03, 0x01, 0x07, 0x80,
             0x04, 0x78, 0x03, 0x01,
@@ -297,8 +298,9 @@ mod tests {
     }
 
     #[test]
-    fn plain_payload_can_contain_multiple_variable_item_packets() {
+    fn lod_1_14d_assumed_plain_payload_can_contain_multiple_variable_item_packets() {
         let mut reader = D2GSReader::new();
+        // Live-shaped bytes captured before fixture metadata existed; assume LoD 1.14d.
         let payload = [
             0x9C, 0x0E, 0x14, 0x10, 0xEB, 0xAA, 0xCC, 0x81, 0x10, 0x00, 0xA2, 0x00, 0x65, 0x08,
             0x02, 0x80, 0x06, 0x17, 0x03, 0x02, 0x9C, 0x0E, 0x14, 0x10, 0x75, 0x35, 0xE6, 0xD0,

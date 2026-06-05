@@ -1835,7 +1835,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_common_live_capture_packets() {
+    fn lod_1_14d_assumed_parse_common_live_capture_packets() {
+        // Live-shaped bytes captured before fixture metadata existed; assume LoD 1.14d.
         assert_eq!(
             ServerMessage::parse(&[0xAF, 0x00]).expect("compression mode should parse"),
             ServerMessage::AdvertiseCompressionMode { use_compression: 0 }

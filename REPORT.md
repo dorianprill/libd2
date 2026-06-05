@@ -264,6 +264,10 @@ MPQ bytes
   boundary should expose each stage independently.
 - Several packets are variable length or bit-packed and still need focused
   parsing helpers and fixtures.
+- Current inline live-shaped D2GS packet fixtures are marked as
+  `lod_1_14d_assumed` where provenance is not yet metadata-backed. They should
+  move into a versioned fixture tree before broader Classic/LoD patch
+  compatibility is claimed.
 - Live packet capture depends on host networking and privileges; tests should
   use byte fixtures instead.
 - Native map generation and pathfinding are still missing.
@@ -287,28 +291,35 @@ MPQ bytes
 5. Create a small LoD 1.14 `d2helper` prototype using the callback API, with an
    egui worker-thread/channel boundary and an automap-style isometric debug
    renderer over `GameState`.
-6. Create captured-payload fixtures and broader state-transition tests.
-7. Build read-only MPQ archive extraction on top of `core::mpq`: file/memory
+6. Create a versioned D2GS fixture tree with metadata for edition, expansion,
+   patch, packet direction, compressed/plain framing, source/provenance, and
+   expected decoded messages/state changes.
+7. Add packet-table compatibility tests against local `Diablo2PacketsData`
+   schemas for legacy patches such as 1.13c, 1.14d, and 1.15 before claiming
+   Classic/LoD patch coverage beyond the current 1.14d-oriented assumptions.
+8. Move inline `lod_1_14d_assumed` packet bytes into that fixture tree once
+   provenance files exist.
+9. Build read-only MPQ archive extraction on top of `core::mpq`: file/memory
    reader abstraction, decrypted hash/block tables, path lookup, sector
    extraction, and uncompressed file support.
-8. Add PKWARE implode decompression for classic Diablo II MPQs, preferably
+10. Add PKWARE implode decompression for classic Diablo II MPQs, preferably
    behind a focused module with fixture tests from Blaine's package.
-9. Add TXT/TBL/bin data integration for resolving monster, object, item, skill,
+11. Add TXT/TBL/bin data integration for resolving monster, object, item, skill,
    and string names from extracted game files.
-10. Add pathfinding over `CollisionGrid` plus dynamic overlays from live
+12. Add pathfinding over `CollisionGrid` plus dynamic overlays from live
    `GameState` units and objects.
-11. Implement `.d2s` quest and waypoint section parsers next; these are
+13. Implement `.d2s` quest and waypoint section parsers next; these are
    marker-delimited and lower risk than item rewriting.
-12. Add a version-dispatched item bitstream reader for legacy/LoD versus D2R
+14. Add a version-dispatched item bitstream reader for legacy/LoD versus D2R
    item encoding.
-13. Port D2R item-list navigation from Horadric Tools in read-only form before
+15. Port D2R item-list navigation from Horadric Tools in read-only form before
    attempting any item write support.
-14. Add scanner-style validation helpers for D2R save invariants: checksum,
+16. Add scanner-style validation helpers for D2R save invariants: checksum,
    size, stat terminator, item counts, follower count/payload length, and
    Warlock follower payload size.
-15. Start native map generation with a narrow area family after fixture coverage
+17. Start native map generation with a narrow area family after fixture coverage
    exists for external generated-map imports.
-16. Keep `ARCHITECTURE.md` and `REPORT.md` updated as each component becomes
+18. Keep `ARCHITECTURE.md` and `REPORT.md` updated as each component becomes
    real implementation.
 
 ## Resource Comparison
