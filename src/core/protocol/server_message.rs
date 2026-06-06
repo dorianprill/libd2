@@ -1284,6 +1284,25 @@ impl ServerMessage {
                     amount: cursor.u32_le(),
                 })
             }
+            0x23 => {
+                let mut cursor = PacketCursor::new(input, 13)?;
+                Ok(Self::SetSkill {
+                    unit_type: cursor.u8(),
+                    unit_id: cursor.u32_le(),
+                    hand: cursor.u8(),
+                    skill_id: cursor.u16_le(),
+                    item_id: cursor.u32_le(),
+                })
+            }
+            0x28 => {
+                let mut cursor = PacketCursor::new(input, 103)?;
+                Ok(Self::PlayerQuestInfo {
+                    update_type: cursor.u8(),
+                    unit_id: cursor.u32_le(),
+                    action_type: cursor.u8(),
+                    quest_bits: cursor.array(),
+                })
+            }
             0x3E => {
                 let mut cursor = PacketCursor::new_variable(input, 2, 1)?;
                 let packet_size = cursor.u8();
@@ -1973,6 +1992,36 @@ mod tests {
                 x: 3791,
                 y: 5118,
                 unknown2: 0,
+            }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[
+                0x23, 0x00, 0xC3, 0x38, 0xB6, 0x70, 0x00, 0x46, 0x00, 0xFF, 0xFF, 0xFF, 0xFF,
+            ])
+            .expect("set skill should parse"),
+            ServerMessage::SetSkill {
+                unit_type: 0,
+                unit_id: 0x70B6_38C3,
+                hand: 0,
+                skill_id: 0x46,
+                item_id: 0xFFFF_FFFF,
+            }
+        );
+
+        let mut quest_info = vec![0x28, 0x06, 0xC3, 0x38, 0xB6, 0x70, 0x01];
+        quest_info.extend(0..96);
+        let mut quest_bits = [0u8; 96];
+        for (index, byte) in quest_bits.iter_mut().enumerate() {
+            *byte = index as u8;
+        }
+        assert_eq!(
+            ServerMessage::parse(&quest_info).expect("player quest info should parse"),
+            ServerMessage::PlayerQuestInfo {
+                update_type: 6,
+                unit_id: 0x70B6_38C3,
+                action_type: 1,
+                quest_bits,
             }
         );
     }

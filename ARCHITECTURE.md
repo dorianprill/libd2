@@ -286,6 +286,9 @@ state flags by GUID.
 Packets `0x4C UnitSkillOnTarget` and `0x4D UnitSkillOnLocation` are parsed as
 skill-use events but currently remain state-neutral. They are ready to feed a
 future skill/missile/event visualization layer once that state model exists.
+Packets `0x23 SetSkill` and `0x28 PlayerQuestInfo` are also parsed and
+state-neutral: `0x23` can later back selected-skill display, while `0x28`
+preserves the 96-byte quest bitstream until quest-state semantics are modeled.
 
 Local player identity is taken from `0x0B GameHandshake`, then resolved through
 the same alias table. `0x59 AssignPlayer` creates or refreshes player memory but

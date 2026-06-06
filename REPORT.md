@@ -79,6 +79,11 @@ The current suite has 96 unit tests.
   `0x4D UnitSkillOnLocation`, cross-checked against local blacha and
   `Diablo2PacketsData` resources. These packets are parsed but state-neutral
   until skill/missile visualization exists.
+- Added LoD 1.14d-assumed parsers for `0x23 SetSkill` and
+  `0x28 PlayerQuestInfo`, cross-checked against local blacha and
+  `Diablo2PacketsData` resources. `0x23` is ready for later selected-skill
+  display, while `0x28` preserves the raw 96-byte quest bitstream until quest
+  semantics are implemented.
 - Hardened the live pnet receive loop so malformed Ethernet/point-to-point IP
   frames and one-off receive errors are skipped instead of panicking the capture
   worker.
