@@ -283,6 +283,10 @@ preservation. Item action packets currently upsert item owner and decoded
 packet-time item state; fixed `0x7D` packets update the matching item's raw
 state flags by GUID.
 
+Packets `0x4C UnitSkillOnTarget` and `0x4D UnitSkillOnLocation` are parsed as
+skill-use events but currently remain state-neutral. They are ready to feed a
+future skill/missile/event visualization layer once that state model exists.
+
 Local player identity is taken from `0x0B GameHandshake`, then resolved through
 the same alias table. `0x59 AssignPlayer` creates or refreshes player memory but
 does not guess local identity by itself. This avoids marking the first observed

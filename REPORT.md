@@ -75,6 +75,13 @@ The current suite has 96 unit tests.
   `Diablo2PacketsData` resources. `0x75` now updates known player levels in
   `GameState`; the remaining party/relationship fields are parsed but not yet
   promoted into a richer party model.
+- Added LoD 1.14d-assumed parsers for `0x4C UnitSkillOnTarget` and
+  `0x4D UnitSkillOnLocation`, cross-checked against local blacha and
+  `Diablo2PacketsData` resources. These packets are parsed but state-neutral
+  until skill/missile visualization exists.
+- Hardened the live pnet receive loop so malformed Ethernet/point-to-point IP
+  frames and one-off receive errors are skipped instead of panicking the capture
+  worker.
 - Updated player stat handling so `UnitStat::Level` changes refresh the
   persistent player level exposed to UI consumers.
 - Hardened session and area lifecycle state: `GameLoading` and

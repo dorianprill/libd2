@@ -214,7 +214,11 @@ impl Connection {
                         && interface.is_point_to_point()
                     {
                         // Maybe is TUN interface
-                        let version = Ipv4Packet::new(&packet).unwrap().get_version();
+                        let Some(ipv4_packet) = Ipv4Packet::new(packet) else {
+                            eprintln!("[{}]: Malformed point-to-point IP packet", interface.name);
+                            continue;
+                        };
+                        let version = ipv4_packet.get_version();
 
                         fake_ethernet_frame.set_destination(MacAddr(0, 0, 0, 0, 0, 0));
                         fake_ethernet_frame.set_source(MacAddr(0, 0, 0, 0, 0, 0));
@@ -233,14 +237,16 @@ impl Connection {
                             &mut on_event,
                         );
                     }
-                    self.handle_ethernet_frame(
-                        &interface,
-                        &EthernetPacket::new(packet).unwrap(),
-                        game_state,
-                        &mut on_event,
-                    );
+                    let Some(ethernet) = EthernetPacket::new(packet) else {
+                        eprintln!("[{}]: Malformed Ethernet frame", interface.name);
+                        continue;
+                    };
+                    self.handle_ethernet_frame(&interface, &ethernet, game_state, &mut on_event);
                 }
-                Err(e) => panic!("unable to receive packet: {}", e),
+                Err(e) => {
+                    eprintln!("unable to receive packet: {}", e);
+                    continue;
+                }
             }
         }
     }

@@ -1301,6 +1301,31 @@ impl ServerMessage {
                     bitstream: remaining[..bitstream_len].to_vec(),
                 })
             }
+            0x4C => {
+                let mut cursor = PacketCursor::new(input, 16)?;
+                Ok(Self::UnitSkillOnTarget {
+                    unit_type: cursor.u8(),
+                    unit_id: cursor.u32_le(),
+                    skill_id: cursor.u16_le(),
+                    skill_level: cursor.u8(),
+                    target_type: cursor.u8(),
+                    target_id: cursor.u32_le(),
+                    unused: cursor.u16_le(),
+                })
+            }
+            0x4D => {
+                let mut cursor = PacketCursor::new(input, 17)?;
+                Ok(Self::UnitSkillOnLocation {
+                    unit_type: cursor.u8(),
+                    unit_id: cursor.u32_le(),
+                    skill: cursor.u16_le(),
+                    unknown1: cursor.u16_le(),
+                    skill_level: cursor.u8(),
+                    x: cursor.u16_le(),
+                    y: cursor.u16_le(),
+                    unknown2: cursor.u16_le(),
+                })
+            }
             0x51 => {
                 let mut cursor = PacketCursor::new(input, 14)?;
                 Ok(Self::WorldObject {
@@ -1913,6 +1938,41 @@ mod tests {
             ServerMessage::PlayerInProximity {
                 unit_type: 0,
                 unit_id: 0x670C_B09B,
+            }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[
+                0x4C, 0x01, 0x11, 0x00, 0x00, 0x00, 0x4A, 0x01, 0x04, 0x00, 0xC3, 0x38, 0xB6, 0x70,
+                0x00, 0x00,
+            ])
+            .expect("unit skill on target should parse"),
+            ServerMessage::UnitSkillOnTarget {
+                unit_type: 1,
+                unit_id: 0x11,
+                skill_id: 330,
+                skill_level: 4,
+                target_type: 0,
+                target_id: 0x70B6_38C3,
+                unused: 0,
+            }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[
+                0x4D, 0x01, 0x11, 0x00, 0x00, 0x00, 0x4A, 0x01, 0x00, 0x00, 0x04, 0xCF, 0x0E, 0xFE,
+                0x13, 0x00, 0x00,
+            ])
+            .expect("unit skill on location should parse"),
+            ServerMessage::UnitSkillOnLocation {
+                unit_type: 1,
+                unit_id: 0x11,
+                skill: 330,
+                unknown1: 0,
+                skill_level: 4,
+                x: 3791,
+                y: 5118,
+                unknown2: 0,
             }
         );
     }
