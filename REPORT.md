@@ -28,7 +28,7 @@ The crate now resolves dependencies and passes:
 cargo test
 ```
 
-The current suite has 87 unit tests.
+The current suite has 96 unit tests.
 
 ## Work Completed
 
@@ -70,6 +70,20 @@ The current suite has 87 unit tests.
   unit-type `0x00` removals now clear the player's world marker without
   removing the roster row, matching live LoD captures where remote players can
   leave the local visible area while staying in game.
+- Added LoD 1.14d-assumed parsers for `0x75 PlayerPartyInfo` and
+  `0x76 PlayerInProximity`, cross-checked against local blacha and
+  `Diablo2PacketsData` resources. `0x75` now updates known player levels in
+  `GameState`; the remaining party/relationship fields are parsed but not yet
+  promoted into a richer party model.
+- Updated player stat handling so `UnitStat::Level` changes refresh the
+  persistent player level exposed to UI consumers.
+- Hardened session and area lifecycle state: `GameLoading` and
+  `GameExitSuccessful` reset rosters, aliases, local identity, map metadata, and
+  world objects; `UnloadComplete` clears area-local world state and marks player
+  locations unknown; `LoadAct` clears area-local state without erasing known
+  local-player coordinates because live 1.14d can send local movement/resource
+  packets before the act-load packet. Non-local player locations are marked
+  unknown on area load to avoid stale previous-area markers.
 - Stopped treating the first `0x59 AssignPlayer` as local-player proof; local
   identity is now sourced from `0x0B GameHandshake` and resolved through player
   aliases.
@@ -315,8 +329,9 @@ MPQ bytes
    especially `ItemStatCost.txt` bit widths and parameter rules.
 3. Expand `ServerMessage::parse` with the next state-relevant variable-length
    packets after checking each layout against multiple resources.
-4. Add state support for missiles, party/relationship data, mercenaries, richer
-   item semantics, and event derivation.
+4. Add state support for missiles, party/relationship data beyond the current
+   `0x75` level update, mercenaries, richer item semantics, and event
+   derivation.
 5. Create a small LoD 1.14 `d2helper` prototype using the callback API, with an
    egui worker-thread/channel boundary and an automap-style isometric debug
    renderer over `GameState`.
@@ -409,7 +424,7 @@ MPQ bytes
 cargo test
 ```
 
-Result: passed. 92 tests.
+Result: passed. 96 tests.
 
 ```text
 cargo fmt --check

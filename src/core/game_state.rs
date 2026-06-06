@@ -476,6 +476,36 @@ impl GameState {
         player.clear_world_location();
         true
     }
+
+    fn clear_area_world_state(&mut self, preserve_local_player_location: bool) {
+        self.npcs.clear();
+        self.objects.clear();
+        self.items.clear();
+        self.item_stat_updates.clear();
+        self.map.revealed_tiles.clear();
+        let retained_player_id = if preserve_local_player_location {
+            self.local_player_id
+                .map(|local_id| self.resolve_player_id(local_id))
+        } else {
+            None
+        };
+        for (player_id, player) in self.players.iter_mut() {
+            if Some(*player_id) != retained_player_id {
+                player.clear_world_location();
+            }
+        }
+    }
+
+    fn reset_session(&mut self) {
+        self.players.clear();
+        self.player_aliases.clear();
+        self.npcs.clear();
+        self.objects.clear();
+        self.items.clear();
+        self.item_stat_updates.clear();
+        self.map = GameMapState::default();
+        self.local_player_id = None;
+    }
 }
 
 impl Default for GameState {
@@ -491,6 +521,10 @@ impl Default for GameState {
 impl Update for GameState {
     fn update(&mut self, packet: ServerMessage) -> bool {
         match packet {
+            ServerMessage::GameLoading => {
+                self.reset_session();
+                true
+            }
             ServerMessage::GameFlags {
                 difficulty,
                 arena_flags,
@@ -516,12 +550,15 @@ impl Update for GameState {
                 self.map.map_id = Some(map_id);
                 self.map.area_id = Some(area_id);
                 self.map.automap = Some(automap);
-                self.objects.clear();
+                self.clear_area_world_state(true);
                 true
             }
-            ServerMessage::GameExitSuccessful | ServerMessage::UnloadComplete => {
-                self.objects.clear();
-                self.npcs.clear();
+            ServerMessage::UnloadComplete => {
+                self.clear_area_world_state(false);
+                true
+            }
+            ServerMessage::GameExitSuccessful => {
+                self.reset_session();
                 true
             }
             ServerMessage::MapReveal {
@@ -625,6 +662,20 @@ impl Update for GameState {
                 true
             }
             ServerMessage::PlayerLeft { player_id } => self.remove_player(player_id),
+            ServerMessage::PlayerPartyInfo {
+                unit_id,
+                character_level,
+                ..
+            } => {
+                let unit_id = self.resolve_player_id(unit_id);
+                if let Some(player) = self.players.get_mut(&unit_id) {
+                    player.set_level(character_level as u32);
+                    true
+                } else {
+                    false
+                }
+            }
+            ServerMessage::PlayerInProximity { .. } => false,
             ServerMessage::PlayerMapUpdate {
                 player_id,
                 player_x,
@@ -1018,6 +1069,116 @@ mod tests {
         let player = state.player(7).expect("player exists");
         assert_eq!(player.location().x(), 5118);
         assert_eq!(player.location().y(), 5168);
+    }
+
+    #[test]
+    fn player_party_info_updates_known_player_level() {
+        let mut state = GameState::default();
+        state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: 1,
+            szname: *b"Joan\0\0\0\0\0\0\0\0\0\0\0\0",
+            x: 10,
+            y: 20,
+        });
+
+        assert!(state.update(ServerMessage::PlayerPartyInfo {
+            unit_id: 7,
+            party_id: 0xffff,
+            character_level: 88,
+            relationship: 0,
+            in_party: 0,
+        }));
+
+        let player = state.player(7).expect("player exists");
+        assert_eq!(player.level(), 88);
+    }
+
+    #[test]
+    fn local_level_stat_updates_player_level() {
+        let mut state = GameState::default();
+        state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: 1,
+            szname: *b"Joan\0\0\0\0\0\0\0\0\0\0\0\0",
+            x: 10,
+            y: 20,
+        });
+        mark_local(&mut state, 7);
+
+        assert!(state.update(ServerMessage::SetAttributeU16 {
+            attribute: UnitStat::Level as u8,
+            amount: 42,
+        }));
+
+        let player = state.player(7).expect("player exists");
+        assert_eq!(player.level(), 42);
+    }
+
+    #[test]
+    fn game_exit_clears_player_roster_and_local_identity() {
+        let mut state = GameState::default();
+        state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: 1,
+            szname: *b"Joan\0\0\0\0\0\0\0\0\0\0\0\0",
+            x: 10,
+            y: 20,
+        });
+        mark_local(&mut state, 7);
+
+        assert!(state.update(ServerMessage::GameExitSuccessful));
+
+        assert!(state.players().is_empty());
+        assert_eq!(state.local_player_id(), None);
+        assert!(state.map().revealed_tiles.is_empty());
+    }
+
+    #[test]
+    fn load_act_keeps_last_known_player_position_from_earlier_movement_packet() {
+        let mut state = GameState::default();
+        state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: 1,
+            szname: *b"Joan\0\0\0\0\0\0\0\0\0\0\0\0",
+            x: 10,
+            y: 20,
+        });
+        state.update(ServerMessage::AssignPlayer {
+            unit_id: 8,
+            class: 2,
+            szname: *b"Orin\0\0\0\0\0\0\0\0\0\0\0\0",
+            x: 30,
+            y: 40,
+        });
+        mark_local(&mut state, 7);
+        assert!(state.update(ServerMessage::LifeManaUpdate {
+            bitfield: status_bitfield::<12>(&[
+                (100, 15),
+                (100, 15),
+                (100, 15),
+                (5118, 16),
+                (5168, 16),
+                (0, 8),
+                (0, 8),
+            ]),
+        }));
+
+        assert!(state.update(ServerMessage::LoadAct {
+            act: 0,
+            map_id: 0x1234,
+            area_id: 2,
+            automap: 0,
+        }));
+
+        let player = state.player(7).expect("player exists");
+        assert_eq!(player.location().x(), 5118);
+        assert_eq!(player.location().y(), 5168);
+        assert!(player.world_location_known());
+        assert!(!state
+            .player(8)
+            .expect("remote player exists")
+            .world_location_known());
     }
 
     #[test]

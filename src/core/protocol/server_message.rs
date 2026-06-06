@@ -1437,6 +1437,23 @@ impl ServerMessage {
                     unit_life: cursor.u8(),
                 })
             }
+            0x75 => {
+                let mut cursor = PacketCursor::new(input, 13)?;
+                Ok(Self::PlayerPartyInfo {
+                    unit_id: cursor.u32_le(),
+                    party_id: cursor.u16_le(),
+                    character_level: cursor.u16_le(),
+                    relationship: cursor.u16_le(),
+                    in_party: cursor.u16_le(),
+                })
+            }
+            0x76 => {
+                let mut cursor = PacketCursor::new(input, 6)?;
+                Ok(Self::PlayerInProximity {
+                    unit_type: cursor.u8(),
+                    unit_id: cursor.u32_le(),
+                })
+            }
             0x77 => {
                 let mut cursor = PacketCursor::new(input, 2)?;
                 Ok(Self::TradeAction {
@@ -1873,6 +1890,29 @@ mod tests {
                 .expect("walk update should parse"),
             ServerMessage::WalkUpdate {
                 bitfield: [0x4F, 0x80, 0x33, 0x8B, 0xD6, 0x08, 0xFF, 0x7E],
+            }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[
+                0x75, 0x6D, 0x13, 0x9C, 0x41, 0xFF, 0xFF, 0x58, 0x00, 0x00, 0x00, 0x01, 0x00,
+            ])
+            .expect("player party info should parse"),
+            ServerMessage::PlayerPartyInfo {
+                unit_id: 0x419C_136D,
+                party_id: 0xFFFF,
+                character_level: 88,
+                relationship: 0,
+                in_party: 1,
+            }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[0x76, 0x00, 0x9B, 0xB0, 0x0C, 0x67])
+                .expect("player proximity should parse"),
+            ServerMessage::PlayerInProximity {
+                unit_type: 0,
+                unit_id: 0x670C_B09B,
             }
         );
     }

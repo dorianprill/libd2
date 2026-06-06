@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use crate::core::character_class::CharacterClass;
 use crate::core::coordinate::Coordinate;
 use crate::core::entity::Entity;
+use crate::core::unit_stat::UnitStat;
 use crate::core::update::Update;
 use crate::ServerMessage;
 
@@ -270,6 +271,9 @@ impl Player {
 
     pub fn set_stat(&mut self, stat_id: u16, value: u32) {
         self.stats.insert(stat_id, value);
+        if stat_id == UnitStat::Level as u16 {
+            self.level = value;
+        }
     }
 
     pub fn add_stat(&mut self, stat_id: u16, value: u32) {

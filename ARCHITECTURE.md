@@ -275,12 +275,13 @@ coverage.
 
 It implements the `Update` trait with `&mut self` and mutates state for the
 currently parsed packet subset: game flags, act load/unload, map reveal/hide,
-player assignment/movement/join/left, player id alias coalescing, local-player
-HP/mana/stamina/movement verification, world object assignment/removal/state
-metadata, NPC assignment/movement/state/heal/death, simple local player
-stat/experience updates, and raw item-stat update preservation. Item action
-packets currently upsert item owner and decoded packet-time item state; fixed
-`0x7D` packets update the matching item's raw state flags by GUID.
+player assignment/movement/join/left, `0x75` player-info level updates, player
+id alias coalescing, local-player HP/mana/stamina/movement verification, world
+object assignment/removal/state metadata, NPC assignment/movement/state/heal and
+death, simple local player stat/experience updates, and raw item-stat update
+preservation. Item action packets currently upsert item owner and decoded
+packet-time item state; fixed `0x7D` packets update the matching item's raw
+state flags by GUID.
 
 Local player identity is taken from `0x0B GameHandshake`, then resolved through
 the same alias table. `0x59 AssignPlayer` creates or refreshes player memory but
@@ -291,6 +292,15 @@ Player roster membership and current map visibility are intentionally separate.
 `0x5C PlayerLeft` removes a player from the roster. `0x0A RemoveObject` with
 unit type `0` clears only the player's current world-location flag, because live
 LoD captures use it when a remote player unit leaves the local visible area.
+Game-session boundaries clear more aggressively: `0x00 GameLoading` and
+`0x06 GameExitSuccessful` reset the roster, aliases, local-player identity,
+map metadata, and world objects. `0x03 LoadAct` clears area-local world state
+while preserving the local player's known coordinates, because live LoD 1.14d
+captures can emit local movement/resource packets before the act-load packet for
+the area. Non-local player locations are marked unknown on area load so stale
+markers from the previous area do not remain visible. `0x05 UnloadComplete`
+clears area-world state and marks player world locations unknown without
+removing roster rows.
 
 ### Entities and Objects
 

@@ -22,13 +22,13 @@ This list describes the current code, not the final project goal.
    - [x] D2R/modern Battle.net traffic on port `1119` is classified as encrypted/unknown transport and is no longer fed into the legacy D2GS parser.
    - [x] Plain D2GS TCP payloads are split into individual `D2GSPacket`s before parsing, including live-observed concatenated map-reveal and `0x9C` item bursts.
    - [ ] Compressed D2GS packets have corrected chunk-size handling, a packet-size table, and Huffman decoder scaffolding, but still need captured fixture tests before they should be treated as supported.
-   - [x] Parsed server packet IDs: `0x00..0x11`, `0x15`, `0x18`, `0x19..0x20`, `0x3E`, `0x51`, `0x53`, `0x59`, `0x5A`, `0x5B`, `0x5C`, `0x67..0x69`, `0x6B..0x6D`, `0x77`, `0x7D`, `0x8F`, `0x90`, `0x95`, `0x96`, `0x9C`, `0x9D`, `0xA9`, `0xAB`, `0xAC`, `0xAF`, and `0xB0`.
+   - [x] Parsed server packet IDs: `0x00..0x11`, `0x15`, `0x18`, `0x19..0x20`, `0x3E`, `0x51`, `0x53`, `0x59`, `0x5A`, `0x5B`, `0x5C`, `0x67..0x69`, `0x6B..0x6D`, `0x75`, `0x76`, `0x77`, `0x7D`, `0x8F`, `0x90`, `0x95`, `0x96`, `0x9C`, `0x9D`, `0xA9`, `0xAB`, `0xAC`, `0xAF`, and `0xB0`.
    - [x] Local-player HP/mana/stamina bitstreams from `0x18`, `0x95`, and `0x96` are decoded into raw packet-unit vitals, regeneration counters where present, and movement verification coordinates.
-   - [ ] Missing high-priority packet parsers include party/relationship packets (`0x75`, `0x7F`, `0x8B..0x8D`), mercenary/summon updates (`0x4E`, `0x81`, `0x9E..0xA2`), chat/event streams, quest streams, and full item stat-list interpretation.
+   - [ ] Missing high-priority packet parsers include party/relationship packets beyond the parsed `0x75` level update (`0x7F`, `0x8B..0x8D`), mercenary/summon updates (`0x4E`, `0x81`, `0x9E..0xA2`), chat/event streams, quest streams, and full item stat-list interpretation.
    - [ ] BNCS and MCP/Realm protocol support are not implemented; `realm_connection` currently contains declarative status/message sketches only.
 2. Runtime game-state reconstruction
    - [x] Tracks game type, difficulty, locale, expansion/ladder/hardcore flags, local player id, and active act/map metadata.
-   - [x] Tracks players for assignment, join/leave, movement, player-map updates, level, simple local stats, experience updates, and local-player HP/mana/stamina/movement verification.
+   - [x] Tracks players for assignment, join/leave, movement, player-map updates, `0x75` party-info level updates, simple local stats, experience updates, and local-player HP/mana/stamina/movement verification.
    - [x] Tracks NPCs/monsters for assignment, movement/action/attack/stop, state, life percent, heal, and death/removal.
    - [x] Tracks world objects for assignment/removal, level-warp entrance markers from `0x09`, and object-state metadata from `0x0E` for known objects.
    - [x] Tracks map reveal/hide tiles from packets.
