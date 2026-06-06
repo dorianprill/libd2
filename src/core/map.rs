@@ -256,6 +256,135 @@ impl fmt::Display for MapGenerationRequestError {
 
 impl std::error::Error for MapGenerationRequestError {}
 
+/// Diablo II map-generation implementation target.
+///
+/// Public reverse-engineering sources agree that LoD map generation is broadly
+/// stable across the post-1.10 legacy line, but libd2 treats patch compatibility
+/// as fixture-proven rather than assumed. The first native implementation target
+/// is therefore the currently playable legacy Battle.net client, LoD 1.14d.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MapGeneratorProfile {
+    /// Legacy Diablo II: Lord of Destruction 1.14d.
+    Lod114d,
+}
+
+impl MapGeneratorProfile {
+    /// Human-readable patch label for diagnostics and fixture metadata.
+    pub const fn patch_label(self) -> &'static str {
+        match self {
+            Self::Lod114d => "LoD 1.14d",
+        }
+    }
+}
+
+impl fmt::Display for MapGeneratorProfile {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.patch_label())
+    }
+}
+
+/// Native seed-to-map generator facade.
+///
+/// Diablo II's generated map state has three distinct layers:
+///
+/// - DRLG layout: room graph, room coordinates, exits, and level bounds.
+/// - Static assets: `Levels.txt`, `LvlMaze.txt`, `LvlPrest.txt`, `LvlTypes.txt`,
+///   `LvlWarp.txt`, `Objects.txt`, `MonStats.txt`, DS1 files, and DT1 collision.
+/// - Runtime extraction: room collision and preset units after D2Common has
+///   initialized an act/level for a seed.
+///
+/// Existing resource projects mostly use the third path by loading the original
+/// D2 DLLs and walking `Level -> Room2 -> Room1 -> CollMap`. This facade is the
+/// starting point for a clean Rust implementation of the first two layers. It
+/// intentionally reports unsupported areas until each area family is ported and
+/// cross-checked against 1.14d fixtures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeMapGenerator {
+    profile: MapGeneratorProfile,
+}
+
+impl NativeMapGenerator {
+    /// Creates a generator targeting LoD 1.14d map semantics.
+    pub const fn lod_1_14d() -> Self {
+        Self {
+            profile: MapGeneratorProfile::Lod114d,
+        }
+    }
+
+    /// Returns the patch profile this generator promises to match.
+    pub const fn profile(self) -> MapGeneratorProfile {
+        self.profile
+    }
+
+    /// Generates one area map from a validated seed/difficulty/area request.
+    ///
+    /// This is the stable call site that d2helper/pathfinding will eventually
+    /// use. The current branch only establishes the API and patch boundary; the
+    /// first real implementation should land as a narrow area-family port with
+    /// fixtures from LoD 1.14d and at least one independent resource output.
+    pub fn generate(
+        &self,
+        request: MapGenerationRequest,
+    ) -> Result<GeneratedMap, NativeMapGenerationError> {
+        Err(NativeMapGenerationError::UnsupportedArea {
+            profile: self.profile,
+            area: request.area(),
+        })
+    }
+}
+
+impl Default for NativeMapGenerator {
+    fn default() -> Self {
+        Self::lod_1_14d()
+    }
+}
+
+/// Error returned by the native Rust map generator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NativeMapGenerationError {
+    /// The selected area family has not been ported for this profile yet.
+    UnsupportedArea {
+        profile: MapGeneratorProfile,
+        area: Area,
+    },
+    /// Required static game data is not loaded or not yet decoded.
+    MissingStaticData {
+        profile: MapGeneratorProfile,
+        table: &'static str,
+    },
+    /// Native output disagreed with a fixture or compatibility guard.
+    IncompatibleOutput {
+        profile: MapGeneratorProfile,
+        reason: String,
+    },
+}
+
+impl fmt::Display for NativeMapGenerationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedArea { profile, area } => write!(
+                formatter,
+                "native {} map generation does not support area {} yet",
+                profile, area
+            ),
+            Self::MissingStaticData { profile, table } => write!(
+                formatter,
+                "native {} map generation requires static table {}",
+                profile, table
+            ),
+            Self::IncompatibleOutput { profile, reason } => {
+                write!(
+                    formatter,
+                    "native {} map generation produced incompatible output: {}",
+                    profile, reason
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for NativeMapGenerationError {}
+
 /// Error returned while normalizing generated-map output for a request.
 #[derive(Debug)]
 pub enum MapGenerationError {
@@ -702,7 +831,8 @@ mod tests {
     use super::{
         act_from_level_id, expand_rle_row, is_good_exit, is_valid_map_seed, rle_row_is_blocked,
         CollisionGrid, GeneratedMap, GeneratedMapJsonError, MapGenerationError,
-        MapGenerationRequest, MapGenerationRequestError, MapObjectKind, MapSeed,
+        MapGenerationRequest, MapGenerationRequestError, MapGeneratorProfile, MapObjectKind,
+        MapSeed, NativeMapGenerationError, NativeMapGenerator,
     };
 
     #[test]
@@ -759,6 +889,37 @@ mod tests {
                 requested_act: Act::Act1,
                 actual_act: Act::Act2,
             }
+        );
+    }
+
+    #[test]
+    fn native_generator_defaults_to_lod_1_14d_profile() {
+        let generator = NativeMapGenerator::default();
+
+        assert_eq!(generator.profile(), MapGeneratorProfile::Lod114d);
+        assert_eq!(generator.profile().patch_label(), "LoD 1.14d");
+    }
+
+    #[test]
+    fn native_generator_reports_unsupported_area_until_ported() {
+        let request =
+            MapGenerationRequest::for_area(0x3607_656c, Difficulty::Hell, Area::ArcaneSanctuary)
+                .expect("area request should be valid");
+
+        let error = NativeMapGenerator::lod_1_14d()
+            .generate(request)
+            .expect_err("area has not been ported yet");
+
+        assert_eq!(
+            error,
+            NativeMapGenerationError::UnsupportedArea {
+                profile: MapGeneratorProfile::Lod114d,
+                area: Area::ArcaneSanctuary,
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            "native LoD 1.14d map generation does not support area Arcane Sanctuary yet"
         );
     }
 

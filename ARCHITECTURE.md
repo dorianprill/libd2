@@ -465,6 +465,9 @@ maps:
 - `GeneratedMap`, `MapObject`, `MapPoint`, and `MapSize`
 - generated-map JSON normalization for both single-level output and wrapped
   generator responses containing `seed`, `difficulty`, `act`, and `levels`
+- `MapGeneratorProfile`, `NativeMapGenerator`, and
+  `NativeMapGenerationError` as the public boundary for a native Rust
+  seed-to-map generator
 - `CollisionGrid` over Blaine's alternating filled/open run-length rows
 - row expansion and point collision queries
 - level-id to act lookup
@@ -474,10 +477,28 @@ This mirrors the JSON shape emitted by `packages/map` without importing the
 Node server, canvas renderer, process pool, or Wine/C map-generation binary.
 Those parts are integration tools, not core Rust library logic.
 
+The native generator branch targets `MapGeneratorProfile::Lod114d` first.
+Legacy LoD map generation appears broadly stable across the post-1.10 line in
+the public resources, but libd2 treats that as a fixture question rather than a
+compatibility guarantee. The current `NativeMapGenerator::lod_1_14d` facade
+returns `UnsupportedArea` for every area until individual area families are
+ported and checked against LoD 1.14d fixture output.
+
+The local resource audit is important for expectations: Blaine's
+`packages/map` and emmericp's `diablo2-maps` are both excellent references for
+the output shape and runtime data structures, but both ultimately call the
+original D2 map runtime (`LoadAct`, `InitLevel`, `GetLevel`, `AddRoomData`) and
+then walk `Level -> Room2 -> Room1 -> CollMap`. They do not provide a complete
+drop-in pure Rust DRLG implementation. Native work should therefore build the
+seed/layout primitives and static-data ingestion in small, fixture-backed
+pieces.
+
 Future map work should be separated into:
 
 - seed and difficulty/act inputs
-- generated static layout
+- deterministic DRLG seed/random streams and generated static layout
+- MPQ-backed TXT/DS1/DT1/static collision ingestion
+- fixture comparisons against LoD 1.14d runtime extraction output
 - dynamic collision overlays from game state
 - pathfinding queries over collision data
 - native Rust generator work for one area family at a time
@@ -527,9 +548,10 @@ behavior and should remain optional.
   non-blocking iterator/stream abstraction.
 - Parser and state-transition unit tests exist for the initial subset, but
   captured packet fixtures are still needed.
-- Native seed-to-layout map generation and pathfinding are not implemented.
+- Native seed-to-layout map generation has only a LoD 1.14d facade; every area
+  currently returns `UnsupportedArea`.
 - Map data currently models generated output and collision queries; it does not
-  invoke or embed a Diablo II map-generation engine.
+  yet embed a complete Diablo II DRLG/static-asset generation engine.
 - Character-file support exists but does not yet parse every section.
-- MPQ support exists only at the primitive header/hash/decrypt layer; archive
-  file extraction, compression, and TXT/TBL/bin decoding still need to be built.
+- MPQ archive extraction and current TBL/bin static-data loading exist, but TXT
+  parsing and DS1/DT1 map asset ingestion are not implemented.

@@ -20,7 +20,9 @@ The crate also has read-only/static-data foundations: a raw-preserving `.d2s`
 loader/saver with legacy, D2R, and Reign of the Warlock detection paths; a
 read-only MPQ v1 archive extractor for Classic/LoD installs; typed `.tbl`/`.bin`
 static-data loading for monster, object, level, and item-name resolution; and
-generated-map/collision data structures. Native seed-to-layout map generation,
+generated-map/collision data structures. A native map-generator facade now
+targets LoD 1.14d explicitly, but every area still reports unsupported until a
+fixture-backed area-family port lands. Native seed-to-layout generation,
 pathfinding, DS1/DT1 map asset ingestion, full item stat-list interpretation,
 and save editing remain future work.
 
@@ -30,7 +32,7 @@ The crate now resolves dependencies and passes:
 cargo test
 ```
 
-The current suite has 107 unit tests.
+The current suite has 109 unit tests.
 
 ## Work Completed
 
@@ -244,6 +246,18 @@ The current suite has 107 unit tests.
   expected by external generators and normalizes either a single generated level
   JSON object or a wrapped `seed`/`difficulty`/`act`/`levels` response into the
   requested `GeneratedMap`.
+- Cloned and audited emmericp's `diablo2-maps` locally as a map-generation
+  resource. It is highly useful for LoD room/collision output, tells, and
+  fixture design, but its generation path is still D2 runtime-backed: it loads
+  acts/levels through D2Common/D2Client and extracts `Level -> Room2 -> Room1 ->
+  CollMap` data after the original engine has initialized a seed.
+- Started branch `feature/native-map-generator-1-14d` for native Rust map
+  generation focused on the currently playable LoD 1.14d client.
+- Added `MapGeneratorProfile::Lod114d`, `NativeMapGenerator`, and
+  `NativeMapGenerationError` as the public native-generator API boundary. The
+  current generator returns `UnsupportedArea` for every area by design, so
+  consumers can wire against a stable call site before individual area families
+  are ported.
 - Added `ConnectionEvent`, `Connection::listen_with_events`,
   `Connection::process_d2gs_payload`, `Client::start_with_events`, and
   `Client::process_d2gs_payload`. These APIs let overlay tools run blocking
@@ -305,12 +319,11 @@ The character-file path is:
 The static-data path now starts as:
 
 ```text
-MPQ bytes
-  -> MpqHeader::parse
-  -> encrypted table bytes
-  -> mpq_hash / mpq_decryption_key / decrypt_mpq_block
-  -> MpqHashEntry / MpqBlockEntry
-  -> future read-only archive extraction
+Classic/LoD install path
+  -> patch_d2.mpq / d2exp.mpq / d2data.mpq precedence
+  -> MpqArchive read-only extraction
+  -> string TBL and selected bin decoders
+  -> GameData lookups for monster, object, item, and level names
 ```
 
 ## Challenges and Risks
@@ -329,12 +342,13 @@ MPQ bytes
   mercenary header fields, character stats, and skills. Quests, waypoints,
   NPC-introduction bytes, item records, detailed iron-golem payloads, detailed
   follower payloads, and stash pages still need section parsers.
-- `core::map` models generated map output and collision queries, but does not
-  generate maps from seed natively. Blaine's package relies on the original
-  game DLLs through a C/Wine helper for that hard part.
-- MPQ support currently stops at archive primitives. Full file extraction still
-  needs a reader abstraction, hash-table lookup, sector table handling,
-  compression dispatch, and fixtures against known MPQ files.
+- `core::map` models generated map output and collision queries. The native
+  generator API now exists for LoD 1.14d, but real area generation is not
+  implemented yet. Blaine's package and emmericp's extractor both rely on the
+  original game DLL/runtime for the hard part.
+- MPQ archive extraction and selected TBL/bin static-data loading exist for
+  Classic/LoD installs, but TXT parsing, DS1/DT1 map assets, richer item stat
+  tables, and D2R/RotW asset packaging are still missing.
 - D2R item codes are Huffman-coded and use a different bit layout than legacy
   1.10+ saves; item parsing must dispatch through `SaveVersion` rather than a
   single shared bit layout.
@@ -352,7 +366,8 @@ MPQ bytes
   compatibility is claimed.
 - Live packet capture depends on host networking and privileges; tests should
   use byte fixtures instead.
-- Native map generation and pathfinding are still missing.
+- Native map generation has a LoD 1.14d facade only; actual DRLG/static-layout
+  generation and pathfinding are still missing.
 - Current README/repository naming still refers to `libd2r` and Diablo II:
   Resurrected in places, while `AGENTS.md` describes broader Classic, Lord of
   Destruction, Resurrected, and Reign of the Warlock support.
@@ -371,9 +386,9 @@ MPQ bytes
 4. Add state support for missiles, party/relationship data beyond the current
    `0x75` level update, mercenaries, richer item semantics, and event
    derivation.
-5. Create a small LoD 1.14 `d2helper` prototype using the callback API, with an
-   egui worker-thread/channel boundary and an automap-style isometric debug
-   renderer over `GameState`.
+5. Continue hardening the LoD 1.14 `d2helper` overlay by feeding it richer
+   library state, especially fixture-backed map boundaries, exits, party data,
+   missiles, and derived item/monster events.
 6. Create a versioned D2GS fixture tree with metadata for edition, expansion,
    patch, packet direction, compressed/plain framing, source/provenance, and
    expected decoded messages/state changes.
@@ -398,8 +413,10 @@ MPQ bytes
 15. Add scanner-style validation helpers for D2R save invariants: checksum,
    size, stat terminator, item counts, follower count/payload length, and
    Warlock follower payload size.
-16. Start native map generation with a narrow area family after fixture coverage
-   exists for external generated-map imports.
+16. Port the first native LoD 1.14d area family behind
+   `NativeMapGenerator::lod_1_14d`, with fixture output from a D2-runtime
+   extractor. Tower Cellar is a good correctness scaffold; Blood Moor is the
+   most useful early gameplay/overlay target.
 17. Keep `ARCHITECTURE.md` and `REPORT.md` updated as each component becomes
    real implementation.
 
@@ -430,6 +447,13 @@ MPQ bytes
   enrichment, and good-exit rules. The C client hooks, Wine process management,
   Express server, LRU process cache, and canvas rendering should stay outside
   this Rust core crate.
+- emmericp/diablo2-maps is the strongest current map-generation reference for
+  LoD fixture design. It targets Diablo II 1.13c in its loader, but its
+  extractor captures the runtime structures we need to compare against:
+  `LevelMap` origin/size in game-tile coordinates, room list, collision flags,
+  preset units, adjacent levels, and room tells. Like Blaine's package, it
+  still depends on original D2 DLL/runtime calls rather than a standalone DRLG
+  implementation.
 - OpenD2 is useful as an independent packet-layout cross-check, especially for
   NPC movement and assignment comments in `Shared/D2Packets.hpp`.
 - Kolbot/D2BS is useful for unit semantics, item events, stat meanings, and
@@ -463,7 +487,7 @@ MPQ bytes
 cargo test
 ```
 
-Result: passed. 107 tests.
+Result: passed. 109 tests.
 
 ```text
 cargo fmt --check
