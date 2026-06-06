@@ -1,17 +1,30 @@
-# A Diablo II Core and Client Library 
+# A Diablo II Core and Client Library
 
-A Diablo II library for core and simple client functionality, written in Rust for performance, safety and re-usability without any runtime requirements.
+A Diablo II library for passive game-state reconstruction, save/static-data
+parsing, and helper-tool foundations, written in Rust for performance, safety,
+and re-usability without modifying the running game client.
 
+The current focus is legacy Classic/Lord of Destruction 1.14-era packet capture
+and state reconstruction, plus read-only foundations for character files, MPQ
+archives, static data, and generated maps. The companion overlay/debug UI is
+[d2helper](https://github.com/dorianprill/d2helper), which consumes this crate
+for live LoD packet capture and automap-style visualization.
 
-This effort is very much WIP, so it is not available on crates.io yet.  
+This effort is still WIP and is not available on crates.io yet.
 
 If you are interested in Diablo II and/or Rust, this might be fun!
 
 ## Long Term Goal
 
-In the long term, the library aims to make it possible to write a headless client that can connect to the game servers and interact with the game world.
-An immediate use case is a game helper tool that visualizes the game state in real time (e.g. a map overlay, item and buff tracking, character reading for inspection, editing and download from bnet, etc. ) along with some QoL-functionality.
+In the long term, the library aims to make it possible to build high-quality
+external Diablo II tooling: packet-derived live game-state visualization,
+map/collision/pathing helpers, event notifications, character-file inspection
+and editing, and eventually more complete client/protocol workflows.
 
+The immediate consumer is
+[d2helper](https://github.com/dorianprill/d2helper), an egui-based helper and
+debug overlay for LoD 1.14 that displays packet-derived players, monsters,
+objects, items, static-data names, and generated-map collision when available.
 
 ## Feature List
 
@@ -19,9 +32,10 @@ This list describes the current code, not the final project goal.
 
 1. Network and protocol support
    - [x] Passive packet capture through `Client`/`Connection` using `pnet`; legacy Classic/LoD plaintext D2GS server traffic from source port `4000` is routed to the D2GS reader. Client-to-server packets with destination port `4000` are ignored for now because they use the separate client packet space. Capture opens the datalink channel without promiscuous mode because local client/server traffic is sufficient and promiscuous membership can fail on some wireless interfaces.
+   - [x] Live server-to-client TCP payloads are reconstructed in sequence order before D2GS parsing. Duplicate retransmissions are ignored, overlapping retransmissions are trimmed, out-of-order segments are buffered, and bounded gap resets are reported as transport warnings.
    - [x] D2R/modern Battle.net traffic on port `1119` is classified as encrypted/unknown transport and is no longer fed into the legacy D2GS parser.
    - [x] Plain D2GS TCP payloads are split into individual `D2GSPacket`s before parsing, including live-observed concatenated map-reveal and `0x9C` item bursts.
-   - [ ] Compressed D2GS packets have corrected chunk-size handling, a packet-size table, and Huffman decoder scaffolding, but still need captured fixture tests before they should be treated as supported.
+   - [x] Compressed D2GS/Huffman framing tracks `0xAF` compression mode, supports one-byte and two-byte chunk headers, buffers compressed chunks split across TCP payloads, and is covered by Blacha-derived Huffman fixtures. More captured live compressed fixtures are still needed before claiming broad compressed-traffic compatibility.
    - [x] Parsed server packet IDs: `0x00..0x11`, `0x15`, `0x18`, `0x19..0x20`, `0x23`, `0x28`, `0x3E`, `0x4C`, `0x4D`, `0x51`, `0x53`, `0x59`, `0x5A`, `0x5B`, `0x5C`, `0x67..0x69`, `0x6B..0x6D`, `0x75`, `0x76`, `0x77`, `0x7D`, `0x8F`, `0x90`, `0x95`, `0x96`, `0x9C`, `0x9D`, `0xA9`, `0xAB`, `0xAC`, `0xAF`, and `0xB0`.
    - [x] Local-player HP/mana/stamina bitstreams from `0x18`, `0x95`, and `0x96` are decoded into raw packet-unit vitals, regeneration counters where present, and movement verification coordinates.
    - [ ] Missing high-priority packet parsers include party/relationship packets beyond the parsed `0x75` level update (`0x7F`, `0x8B..0x8D`), mercenary/summon updates (`0x4E`, `0x81`, `0x9E..0xA2`), chat/event streams, quest streams, and full item stat-list interpretation.
@@ -57,6 +71,7 @@ This list describes the current code, not the final project goal.
 6. Client API
    - [x] Blocking shadow-client facade with packet listener and state update loop.
    - [x] Callback-oriented capture API via `Client::start_with_events`, `Connection::listen_with_events`, and fixture/replay helpers that emit `ConnectionEvent`s with the current `GameState`.
+   - [x] Packet parse errors and transport warnings are surfaced as events, which lets UI consumers keep running while showing diagnostics for unsupported packets, TCP gaps, duplicate segments, and partial D2GS buffers.
    - [ ] Active client/protocol state machine, decoded-packet iterator, and fully non-blocking stream API are not implemented.
 
 ## How to Build
@@ -119,6 +134,24 @@ fn main() {
 D2R/modern Battle.net traffic on port `1119` is classified as encrypted/unknown
 transport and is not fed into the legacy D2GS parser.
 
+For a concrete application, see
+[d2helper](https://github.com/dorianprill/d2helper). It uses
+`Client::start_with_events` on a worker thread, loads Classic/LoD MPQ static
+data for names, and renders a packet-derived automap/debug view in egui.
+
+## History
+
+The first commit was on 2022-02-23. The initial version was a Rust network/TCP
+sniffing layer for Diablo II game-server packets, followed by Rust translations
+of the legacy Huffman decoder and packet parsers from D2BS, RedVex, and
+OmegaBot-era resources. That early code already fixed up several packet layouts
+for LoD 1.14 and had a simple `GameState` plus basic Diablo II data structures.
+
+Development resumed with a broader scope: keep the packet-only legacy LoD path
+useful for external tools, add version-aware save parsing for Classic, LoD, D2R,
+and Reign of the Warlock, port enough MPQ/static-data support for names and map
+metadata, and expose a stable library API that d2helper can build on.
+
 ## Contributing
 
 This is quite the challenge so any help is appreciated!  
@@ -127,7 +160,11 @@ There is quite a bit of awesome code out there, but scattered across various sou
 
 ## Disclaimer and Credits
 
-Little of this works yet and probably never will as i haven't started  working on the tool that will use this library as a dependency (see section `Long term Goal`).
+This project is a reverse-engineered compatibility effort for external tooling.
+It is not affiliated with Blizzard. The crate is useful today for passive LoD
+1.14-era packet-derived state reconstruction, read-only MPQ/static-data loading,
+generated-map JSON ingestion, and conservative character-file parsing, but many
+protocol and save-editing areas are intentionally incomplete.
 
 Here are some great resources on the original game, thanks to everyone who has been working on reverse engineering and botting for this game over the years, without you this would not be possible:
 

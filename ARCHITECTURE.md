@@ -28,9 +28,12 @@ src/core/
   network/
     connection.rs
       interface selection and packet capture through pnet
+    tcp_stream.rs
+      ordered server-to-client TCP payload reconstruction for live D2GS capture
     d2gs/
       d2gs_reader.rs
-        D2GS frame/chunk handling, decompression dispatch, packet queue
+        D2GS frame/chunk handling, compression-mode tracking,
+        decompression dispatch, packet queue
       d2gs_packet.rs
         validated decompressed packet wrapper
     huffman.rs
@@ -90,7 +93,10 @@ Connection::listen_with_events(&mut GameState, callback)
 Ethernet -> IPv4/IPv6 -> TCP/UDP filtering
     |
     v
-D2GSReader::read(raw payload)
+TCP sequence ordering / retransmission handling for live port-4000 streams
+    |
+    v
+D2GSReader::read(ordered D2GS bytes)
     |
     v
 D2GS chunk framing and optional Huffman decompression
@@ -114,7 +120,9 @@ External tools forward snapshots/events to UI or storage
 The live path now applies successfully parsed packets to `GameState` during
 capture. The event path reports unsupported packet IDs and parse errors as
 `ConnectionEvent::ParseError` so overlay tools can keep running while also
-counting missing packet coverage.
+counting missing packet coverage. Transport-level issues such as duplicate TCP
+segments, out-of-order gaps, and buffered partial D2GS chunks are reported as
+`ConnectionEvent::TransportWarning`.
 
 ## Control Flow
 
@@ -153,11 +161,14 @@ state-update path for fixtures and replay without live packet capture.
 - read Ethernet frames from `pnet`
 - unwrap IPv4/IPv6 and TCP/UDP payloads
 - classify likely Diablo II transport ports
-- pass legacy plaintext D2GS payload bytes from port `4000` to `D2GSReader`
+- reconstruct the ordered server-to-client TCP byte stream for legacy D2GS
+  traffic on port `4000`
+- pass ordered legacy plaintext/compressed D2GS bytes to `D2GSReader`
 - ignore D2R/modern Battle.net port `1119` for D2GS parsing because it is
   protected transport, not legacy D2GS framing
 - drain decoded packets and apply successfully parsed packets to `GameState`
-- emit `ConnectionEvent` values for parsed messages and parse errors
+- emit `ConnectionEvent` values for parsed messages, parse errors, and
+  transport warnings
 
 This component still owns capture, decode, parse, and state mutation together.
 The callback API is enough for a first overlay, while a future stream API can
@@ -170,7 +181,10 @@ split those stages more cleanly.
 
 - plain packet detection
 - plain TCP payload stream splitting
+- `0xAF` compression-mode tracking so one-byte Huffman chunk headers below
+  `0xF0` are not mistaken for plain packet ids
 - compressed chunk length parsing
+- buffering of compressed chunks split across TCP payloads
 - Huffman decompression
 - packet-size calculation for plain and decompressed packet streams
 - packet queueing
@@ -180,8 +194,9 @@ applies successfully parsed messages to `GameState`.
 
 The plain-packet stream path is covered by unit tests, including live-observed
 concatenated map-reveal and item-action bursts. The compressed-packet path has
-chunk parsing and Huffman tables/decoder code, but it still needs captured
-fixture tests and audit before it should be considered reliable input support.
+Blacha-derived Huffman fixture tests for one-byte chunk headers and split chunk
+buffering. It still needs more captured LoD fixture coverage before broader
+compressed-traffic compatibility is claimed.
 
 ### Protocol Messages
 
@@ -194,7 +209,11 @@ subset:
 0x15,
 0x18,
 0x19..0x20,
+0x23,
+0x28,
 0x3E,
+0x4C,
+0x4D,
 0x51,
 0x53,
 0x59,

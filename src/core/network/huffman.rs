@@ -110,24 +110,23 @@ const COMPRESSION_TABLE: [u32; 256] = [
 pub fn decode(input: &[u8], output: &mut Vec<u8>) {
     let mut result: Vec<u8> = Vec::with_capacity(1024);
     let mut size = input.len();
-    let mut b: usize = 0;
+    let mut b: u32 = 0;
     let mut i: usize = 0;
     let mut count: i32 = 0x20;
 
     loop {
-        let mut a: usize;
         if count >= 8 {
             while size > 0 && count >= 8 {
                 count -= 8;
                 size -= 1;
-                a = (input[i] as usize) << count as i32;
+                let a = (input[i] as u32) << count;
                 b |= a;
                 i += 1;
             }
         }
-        let index = INDEX_TABLE[b >> 0x18] as usize;
-        let mut a = CHARACTER_TABLE[index] as usize;
-        let d = (b >> (0x18 - a)) & BIT_MASKS[a] as usize;
+        let index = INDEX_TABLE[(b >> 0x18) as usize] as usize;
+        let a = CHARACTER_TABLE[index] as usize;
+        let d = ((b >> (0x18 - a)) & BIT_MASKS[a] as u32) as usize;
         let c = CHARACTER_TABLE[index + 2 * d + 2] as u32;
 
         count += c as i32;
@@ -136,11 +135,10 @@ pub fn decode(input: &[u8], output: &mut Vec<u8>) {
             return;
         }
 
-        a = CHARACTER_TABLE[index + 2 * d + 1] as usize;
+        let a = CHARACTER_TABLE[index + 2 * d + 1];
+        result.push(a);
 
-        result.push(a as u8);
-
-        b <<= c & 0xFF;
+        b = b.wrapping_shl(c & 0xFF);
     }
 }
 
@@ -164,7 +162,7 @@ pub fn get_chunk_params(raw: &[u8], header_size: &mut usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::get_chunk_params;
+    use super::{decode, get_chunk_params};
 
     #[test]
     fn chunk_params_return_payload_length_without_header() {
@@ -178,5 +176,17 @@ mod tests {
             0x0103
         );
         assert_eq!(header, 2);
+    }
+
+    #[test]
+    fn decodes_blacha_single_header_fixture() {
+        let mut output = Vec::new();
+
+        decode(&[0x7A, 0x04, 0x64, 0xBB, 0xBC], &mut output);
+
+        assert_eq!(
+            output,
+            [0x01, 0x00, 0x04, 0x08, 0x30, 0x00, 0x01, 0x01, 0x00]
+        );
     }
 }

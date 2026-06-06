@@ -31,6 +31,8 @@ pub struct D2GSReader {
     // used as a single ended queue here
     packets: VecDeque<D2GSPacket>,
     packet_stream: Vec<u8>,
+    compressed_stream: Vec<u8>,
+    compression_enabled: bool,
 }
 
 impl D2GSReader {
@@ -38,11 +40,35 @@ impl D2GSReader {
         D2GSReader {
             packets: VecDeque::with_capacity(128),
             packet_stream: Vec::with_capacity(1600),
+            compressed_stream: Vec::with_capacity(1600),
+            compression_enabled: false,
         }
     }
 
     pub fn next(&mut self) -> Option<D2GSPacket> {
         self.packets.pop_front()
+    }
+
+    /// Clears queued packets and any partial D2GS packet bytes.
+    ///
+    /// Live capture uses this when the lower TCP stream detects that bytes were
+    /// missed and has to resume at a later sequence. Keeping the partial D2GS
+    /// buffer in that situation would make the next valid packet look like a
+    /// continuation of stale data.
+    pub fn reset(&mut self) {
+        self.packets.clear();
+        self.packet_stream.clear();
+        self.compressed_stream.clear();
+        self.compression_enabled = false;
+    }
+
+    /// Returns the number of D2GS bytes waiting for more data.
+    ///
+    /// This includes decompressed/plain packet bytes and raw compressed chunk
+    /// bytes. A non-zero value is normal when TCP splits a D2GS packet or a
+    /// Huffman chunk across multiple segments.
+    pub fn buffered_len(&self) -> usize {
+        self.packet_stream.len() + self.compressed_stream.len()
     }
 
     /// Normalizes a captured legacy D2GS payload into individual game packets.
@@ -65,27 +91,12 @@ impl D2GSReader {
             return;
         }
 
-        if raw[0] < 0xF0 {
-            self.queue_packet_stream(raw);
+        if self.compression_enabled || !self.compressed_stream.is_empty() || raw[0] >= 0xF0 {
+            self.queue_compressed_stream(raw);
             return;
         }
 
-        let mut start = 0;
-        while start < raw.len() {
-            let Some((header_size, data_size)) = compressed_chunk_lengths(&raw[start..]) else {
-                return;
-            };
-            let data_start = start + header_size;
-            let data_end = data_start + data_size;
-            if data_end > raw.len() {
-                return;
-            }
-
-            let mut decompressed_chunk = Vec::with_capacity(data_size.saturating_mul(2));
-            huffman::decode(&raw[data_start..data_end], &mut decompressed_chunk);
-            self.queue_packet_stream(&decompressed_chunk);
-            start = data_end;
-        }
+        self.queue_packet_stream(raw, PacketStreamSource::PlainTcp);
 
         // Packets remain queued for the caller to parse and apply to game state.
     }
@@ -96,14 +107,53 @@ impl D2GSReader {
         }
     }
 
-    fn queue_packet_stream(&mut self, stream: &[u8]) {
+    fn queue_compressed_stream(&mut self, stream: &[u8]) {
+        self.compressed_stream.extend_from_slice(stream);
+
+        let mut start = 0;
+        while start < self.compressed_stream.len() {
+            let Some((header_size, data_size)) =
+                compressed_chunk_lengths(&self.compressed_stream[start..])
+            else {
+                break;
+            };
+            let data_start = start + header_size;
+            let data_end = data_start + data_size;
+            if data_end > self.compressed_stream.len() {
+                break;
+            }
+
+            let mut decompressed_chunk = Vec::with_capacity(data_size.saturating_mul(2));
+            huffman::decode(
+                &self.compressed_stream[data_start..data_end],
+                &mut decompressed_chunk,
+            );
+            self.queue_packet_stream(&decompressed_chunk, PacketStreamSource::Decompressed);
+            start = data_end;
+        }
+
+        if start > 0 {
+            self.compressed_stream.drain(0..start);
+        }
+    }
+
+    fn queue_packet_stream(&mut self, stream: &[u8], source: PacketStreamSource) {
         self.packet_stream.extend_from_slice(stream);
 
         while !self.packet_stream.is_empty() {
             match packet_size_status(&self.packet_stream) {
                 PacketSizeStatus::Complete(size) if self.packet_stream.len() >= size => {
-                    let data = self.packet_stream.drain(0..size).collect();
+                    let data: Vec<u8> = self.packet_stream.drain(0..size).collect();
+                    self.observe_packet_mode(&data, source);
                     self.packets.push_back(D2GSPacket { data });
+                    if self.compression_enabled
+                        && source == PacketStreamSource::PlainTcp
+                        && !self.packet_stream.is_empty()
+                    {
+                        let compressed_tail = std::mem::take(&mut self.packet_stream);
+                        self.queue_compressed_stream(&compressed_tail);
+                        break;
+                    }
                 }
                 PacketSizeStatus::Complete(_) | PacketSizeStatus::NeedMore => break,
                 PacketSizeStatus::Unknown => {
@@ -113,7 +163,22 @@ impl D2GSReader {
             }
         }
     }
+
+    fn observe_packet_mode(&mut self, data: &[u8], _source: PacketStreamSource) {
+        if data.len() == 2 && data[0] == 0xAF {
+            self.compression_enabled = data[1] != 0;
+            if !self.compression_enabled {
+                self.compressed_stream.clear();
+            }
+        }
+    }
 } // impl D2GSReader
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PacketStreamSource {
+    PlainTcp,
+    Decompressed,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PacketSizeStatus {
@@ -275,6 +340,14 @@ mod tests {
         lengths
     }
 
+    fn drain_packets(reader: &mut D2GSReader) -> Vec<Vec<u8>> {
+        let mut packets = Vec::new();
+        while let Some(packet) = reader.next() {
+            packets.push(packet.data);
+        }
+        packets
+    }
+
     #[test]
     fn packet_size_table_matches_1_14d_game_flags_length() {
         let mut len = 0;
@@ -335,5 +408,49 @@ mod tests {
         let packet = reader.next().expect("packet should complete");
         assert_eq!(packet.data, vec![0x07, 0x70, 0x04, 0x78, 0x03, 0x01]);
         assert!(reader.next().is_none());
+    }
+
+    #[test]
+    fn compressed_mode_allows_one_byte_huffman_chunk_header() {
+        let mut reader = D2GSReader::new();
+        // Blacha huffman fixture: a one-byte length header followed by encoded
+        // bytes that decompress to GameFlags (8 bytes) and GameLoading (1 byte).
+        reader.read(&[0xAF, 0x01]);
+        assert_eq!(
+            reader.next().expect("compression mode packet").data,
+            [0xAF, 0x01]
+        );
+
+        reader.read(&[0x06, 0x7A, 0x04, 0x64, 0xBB, 0xBC]);
+
+        assert_eq!(
+            drain_packets(&mut reader),
+            vec![
+                vec![0x01, 0x00, 0x04, 0x08, 0x30, 0x00, 0x01, 0x01],
+                vec![0x00]
+            ]
+        );
+    }
+
+    #[test]
+    fn compressed_chunk_split_across_tcp_payloads_is_buffered() {
+        let mut reader = D2GSReader::new();
+        reader.read(&[0xAF, 0x01]);
+        assert!(reader.next().is_some());
+
+        reader.read(&[0x06, 0x7A, 0x04]);
+        assert!(reader.next().is_none());
+        assert_eq!(reader.buffered_len(), 3);
+
+        reader.read(&[0x64, 0xBB, 0xBC]);
+
+        assert_eq!(
+            drain_packets(&mut reader),
+            vec![
+                vec![0x01, 0x00, 0x04, 0x08, 0x30, 0x00, 0x01, 0x01],
+                vec![0x00]
+            ]
+        );
+        assert_eq!(reader.buffered_len(), 0);
     }
 }

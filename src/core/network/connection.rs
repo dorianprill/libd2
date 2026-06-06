@@ -9,7 +9,7 @@ use self::pnet::packet::ethernet::{EtherTypes, EthernetPacket, MutableEthernetPa
 use self::pnet::packet::ip::{IpNextHeaderProtocol, IpNextHeaderProtocols};
 use self::pnet::packet::ipv4::Ipv4Packet;
 use self::pnet::packet::ipv6::Ipv6Packet;
-use self::pnet::packet::tcp::TcpPacket;
+use self::pnet::packet::tcp::{TcpFlags, TcpPacket};
 use self::pnet::packet::udp::UdpPacket;
 use self::pnet::packet::Packet;
 use self::pnet::util::MacAddr;
@@ -26,6 +26,7 @@ use std::str;
 //use connection::raw_packet::RawPacket;
 use crate::core::game_state::GameState;
 use crate::core::network::d2gs::{D2GSPacket, D2GSReader};
+use crate::core::network::tcp_stream::{TcpReassemblyEvent, TcpStreamReassembler};
 use crate::core::protocol::server_message::ServerMessageParseError;
 use crate::core::protocol::ServerMessage;
 use crate::core::update::Update;
@@ -48,6 +49,25 @@ enum CapturedTransport {
     Ignored,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TcpStreamKey {
+    source: IpAddr,
+    destination: IpAddr,
+    source_port: u16,
+    destination_port: u16,
+}
+
+impl TcpStreamKey {
+    fn new(source: IpAddr, destination: IpAddr, source_port: u16, destination_port: u16) -> Self {
+        Self {
+            source,
+            destination,
+            source_port,
+            destination_port,
+        }
+    }
+}
+
 fn classify_transport(source_port: u16, destination_port: u16) -> CapturedTransport {
     if source_port == LEGACY_D2GS_PORT {
         CapturedTransport::LegacyD2gsServerToClient
@@ -60,7 +80,107 @@ fn classify_transport(source_port: u16, destination_port: u16) -> CapturedTransp
     }
 }
 
-/// Event emitted by [`Connection`] when a legacy D2GS payload produces a packet.
+/// Non-packet diagnostic emitted by [`Connection`] during live capture.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectionTransportWarning {
+    /// A TCP retransmission was fully behind the already-consumed byte stream.
+    DuplicateTcpSegment {
+        sequence: u32,
+        len: usize,
+        expected_sequence: u32,
+    },
+    /// A TCP retransmission overlapped the consumed sequence and only its new
+    /// trailing bytes were forwarded to the D2GS reader.
+    OverlappingTcpSegment {
+        sequence: u32,
+        skipped: usize,
+        emitted: usize,
+        expected_sequence: u32,
+    },
+    /// A TCP segment arrived after a gap and is buffered until the missing
+    /// earlier bytes arrive.
+    OutOfOrderTcpSegment {
+        sequence: u32,
+        len: usize,
+        expected_sequence: u32,
+        buffered_segments: usize,
+        buffered_bytes: usize,
+    },
+    /// A previously buffered segment became contiguous and was forwarded.
+    BufferedTcpSegmentReleased { sequence: u32, len: usize },
+    /// Too much data accumulated behind a missing TCP segment, so the D2GS
+    /// reader was reset and capture resumed at a later sequence.
+    TcpGapReset {
+        sequence: u32,
+        len: usize,
+        expected_sequence: u32,
+        buffered_segments: usize,
+        buffered_bytes: usize,
+    },
+    /// A payload reached the D2GS reader but did not yet complete a D2GS packet.
+    BufferedD2gsPayload {
+        payload_len: usize,
+        buffered_len: usize,
+    },
+}
+
+impl From<TcpReassemblyEvent> for ConnectionTransportWarning {
+    fn from(event: TcpReassemblyEvent) -> Self {
+        match event {
+            TcpReassemblyEvent::DuplicateSegment {
+                sequence,
+                len,
+                expected_sequence,
+            } => Self::DuplicateTcpSegment {
+                sequence,
+                len,
+                expected_sequence,
+            },
+            TcpReassemblyEvent::OverlapTrimmed {
+                sequence,
+                skipped,
+                emitted,
+                expected_sequence,
+            } => Self::OverlappingTcpSegment {
+                sequence,
+                skipped,
+                emitted,
+                expected_sequence,
+            },
+            TcpReassemblyEvent::OutOfOrderBuffered {
+                sequence,
+                len,
+                expected_sequence,
+                buffered_segments,
+                buffered_bytes,
+            } => Self::OutOfOrderTcpSegment {
+                sequence,
+                len,
+                expected_sequence,
+                buffered_segments,
+                buffered_bytes,
+            },
+            TcpReassemblyEvent::BufferedSegmentReleased { sequence, len } => {
+                Self::BufferedTcpSegmentReleased { sequence, len }
+            }
+            TcpReassemblyEvent::GapReset {
+                sequence,
+                len,
+                expected_sequence,
+                buffered_segments,
+                buffered_bytes,
+            } => Self::TcpGapReset {
+                sequence,
+                len,
+                expected_sequence,
+                buffered_segments,
+                buffered_bytes,
+            },
+        }
+    }
+}
+
+/// Event emitted by [`Connection`] when legacy D2GS capture progresses.
 ///
 /// Overlay and visualization tools should treat this as the non-blocking bridge
 /// out of packet capture: run `Connection::listen_with_events` or
@@ -79,17 +199,21 @@ pub enum ConnectionEvent {
         packet: D2GSPacket,
         error: ServerMessageParseError,
     },
+    TransportWarning {
+        warning: ConnectionTransportWarning,
+    },
 }
 
 impl ConnectionEvent {
-    pub fn packet(&self) -> &D2GSPacket {
+    pub fn packet(&self) -> Option<&D2GSPacket> {
         match self {
-            Self::ServerMessage { packet, .. } | Self::ParseError { packet, .. } => packet,
+            Self::ServerMessage { packet, .. } | Self::ParseError { packet, .. } => Some(packet),
+            Self::TransportWarning { .. } => None,
         }
     }
 
-    pub fn packet_id(&self) -> u8 {
-        self.packet().packet_id()
+    pub fn packet_id(&self) -> Option<u8> {
+        self.packet().map(D2GSPacket::packet_id)
     }
 }
 
@@ -110,6 +234,8 @@ pub struct Connection {
     initialized: bool,
     //protocol_state: ProtocolState,
     d2gs_reader: D2GSReader,
+    d2gs_tcp_stream: TcpStreamReassembler,
+    d2gs_tcp_stream_key: Option<TcpStreamKey>,
     // BinaryHeap as a PriorityQueue
     //packet_queue:   BinaryHeap<RawPacket<'a>>
 }
@@ -120,6 +246,8 @@ impl Connection {
             interface: datalink::interfaces().pop().unwrap(),
             initialized: false,
             d2gs_reader: D2GSReader::new(),
+            d2gs_tcp_stream: TcpStreamReassembler::new(),
+            d2gs_tcp_stream_key: None,
         }
     }
 
@@ -292,8 +420,8 @@ impl Connection {
 
     fn handle_tcp_packet<F>(
         &mut self,
-        _source: IpAddr,
-        _destination: IpAddr,
+        source: IpAddr,
+        destination: IpAddr,
         packet: &[u8],
         game_state: &mut GameState,
         on_event: &mut F,
@@ -308,7 +436,20 @@ impl Connection {
             //}
             match classify_transport(tcp.get_source(), tcp.get_destination()) {
                 CapturedTransport::LegacyD2gsServerToClient => {
-                    self.read_d2gs_payload(tcp.payload(), game_state, on_event)
+                    let stream_key = TcpStreamKey::new(
+                        source,
+                        destination,
+                        tcp.get_source(),
+                        tcp.get_destination(),
+                    );
+                    self.read_legacy_d2gs_tcp_segment(
+                        stream_key,
+                        tcp.get_flags(),
+                        tcp.get_sequence(),
+                        tcp.payload(),
+                        game_state,
+                        on_event,
+                    );
                 }
                 CapturedTransport::LegacyD2gsClientToServer => {}
                 CapturedTransport::D2rEncryptedOrUnknown | CapturedTransport::Ignored => {}
@@ -460,12 +601,67 @@ impl Connection {
         self.read_d2gs_payload(payload, game_state, &mut on_event);
     }
 
+    fn read_legacy_d2gs_tcp_segment<F>(
+        &mut self,
+        stream_key: TcpStreamKey,
+        tcp_flags: u16,
+        sequence: u32,
+        payload: &[u8],
+        game_state: &mut GameState,
+        on_event: &mut F,
+    ) where
+        F: FnMut(ConnectionEvent, &GameState),
+    {
+        if self.d2gs_tcp_stream_key.as_ref() != Some(&stream_key)
+            || tcp_flags & (TcpFlags::SYN | TcpFlags::RST) != 0
+        {
+            self.d2gs_tcp_stream.reset();
+            self.d2gs_reader.reset();
+            self.d2gs_tcp_stream_key = Some(stream_key);
+        }
+
+        if payload.is_empty() {
+            if tcp_flags & TcpFlags::FIN != 0 {
+                self.d2gs_tcp_stream.reset();
+                self.d2gs_reader.reset();
+            }
+            return;
+        }
+
+        let result = self.d2gs_tcp_stream.push(sequence, payload);
+        if result.reset_required() {
+            self.d2gs_reader.reset();
+        }
+
+        for event in result.events() {
+            on_event(
+                ConnectionEvent::TransportWarning {
+                    warning: (*event).into(),
+                },
+                game_state,
+            );
+        }
+
+        for payload in result.payloads() {
+            self.read_d2gs_payload(payload, game_state, on_event);
+        }
+
+        if tcp_flags & TcpFlags::FIN != 0 {
+            self.d2gs_tcp_stream.reset();
+            self.d2gs_reader.reset();
+        }
+    }
+
     fn read_d2gs_payload<F>(&mut self, payload: &[u8], game_state: &mut GameState, on_event: &mut F)
     where
         F: FnMut(ConnectionEvent, &GameState),
     {
+        let buffered_before = self.d2gs_reader.buffered_len();
+        let mut emitted_packet = false;
+
         self.d2gs_reader.read(payload);
         while let Some(packet) = self.d2gs_reader.next() {
+            emitted_packet = true;
             match ServerMessage::try_from(&packet) {
                 Ok(message) => {
                     let applied = game_state.update(message.clone());
@@ -483,14 +679,27 @@ impl Connection {
                 }
             }
         }
+
+        let buffered_len = self.d2gs_reader.buffered_len();
+        if !payload.is_empty() && !emitted_packet && buffered_len > buffered_before {
+            on_event(
+                ConnectionEvent::TransportWarning {
+                    warning: ConnectionTransportWarning::BufferedD2gsPayload {
+                        payload_len: payload.len(),
+                        buffered_len,
+                    },
+                },
+                game_state,
+            );
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_transport, CapturedTransport, Connection, ConnectionEvent, D2R_BNET_PORT,
-        LEGACY_D2GS_PORT,
+        classify_transport, CapturedTransport, Connection, ConnectionEvent,
+        ConnectionTransportWarning, D2R_BNET_PORT, LEGACY_D2GS_PORT,
     };
     use crate::core::game_state::GameState;
     use crate::core::protocol::server_message::ServerMessageParseError;
@@ -596,5 +805,126 @@ mod tests {
             }
             other => panic!("unexpected connection event: {:?}", other),
         }
+    }
+
+    #[test]
+    fn live_tcp_reassembly_buffers_out_of_order_segments_before_d2gs_decode() {
+        let mut connection = Connection::new();
+        let mut state = GameState::default();
+        let key = super::TcpStreamKey::new(
+            "10.0.0.1".parse().unwrap(),
+            "10.0.0.2".parse().unwrap(),
+            LEGACY_D2GS_PORT,
+            51_000,
+        );
+        let mut events = Vec::new();
+
+        connection.read_legacy_d2gs_tcp_segment(
+            key.clone(),
+            0,
+            100,
+            &[0x07, 0x70, 0x04],
+            &mut state,
+            &mut |event, _| events.push(event),
+        );
+        connection.read_legacy_d2gs_tcp_segment(
+            key.clone(),
+            0,
+            106,
+            &[0x07, 0x78, 0x04, 0x78, 0x03, 0x01],
+            &mut state,
+            &mut |event, _| events.push(event),
+        );
+
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                ConnectionEvent::TransportWarning {
+                    warning: ConnectionTransportWarning::BufferedD2gsPayload {
+                        payload_len: 3,
+                        buffered_len: 3,
+                    }
+                }
+            )
+        }));
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                ConnectionEvent::TransportWarning {
+                    warning: ConnectionTransportWarning::OutOfOrderTcpSegment {
+                        sequence: 106,
+                        expected_sequence: 103,
+                        ..
+                    }
+                }
+            )
+        }));
+        assert!(state.map().revealed_tiles.is_empty());
+
+        connection.read_legacy_d2gs_tcp_segment(
+            key,
+            0,
+            103,
+            &[0x78, 0x03, 0x01],
+            &mut state,
+            &mut |event, _| events.push(event),
+        );
+
+        let parsed_packets = events
+            .iter()
+            .filter_map(ConnectionEvent::packet_id)
+            .collect::<Vec<_>>();
+        assert_eq!(parsed_packets, vec![0x07, 0x07]);
+        assert_eq!(state.map().revealed_tiles.len(), 2);
+    }
+
+    #[test]
+    fn live_tcp_reassembly_ignores_duplicate_segment_without_replaying_state() {
+        let mut connection = Connection::new();
+        let mut state = GameState::default();
+        let key = super::TcpStreamKey::new(
+            "10.0.0.1".parse().unwrap(),
+            "10.0.0.2".parse().unwrap(),
+            LEGACY_D2GS_PORT,
+            51_000,
+        );
+        let payload = [0x07, 0x70, 0x04, 0x78, 0x03, 0x01];
+        let mut events = Vec::new();
+
+        connection.read_legacy_d2gs_tcp_segment(
+            key.clone(),
+            0,
+            100,
+            &payload,
+            &mut state,
+            &mut |event, _| events.push(event),
+        );
+        connection.read_legacy_d2gs_tcp_segment(
+            key,
+            0,
+            100,
+            &payload,
+            &mut state,
+            &mut |event, _| events.push(event),
+        );
+
+        let parsed_packets = events
+            .iter()
+            .filter_map(ConnectionEvent::packet_id)
+            .collect::<Vec<_>>();
+        assert_eq!(parsed_packets, vec![0x07]);
+        assert_eq!(state.map().revealed_tiles.len(), 1);
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                ConnectionEvent::TransportWarning {
+                    warning: ConnectionTransportWarning::DuplicateTcpSegment {
+                        sequence: 100,
+                        expected_sequence: 106,
+                        ..
+                    }
+                }
+            )
+        }));
     }
 }

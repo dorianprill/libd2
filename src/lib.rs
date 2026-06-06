@@ -36,7 +36,9 @@ pub use crate::core::mpq::{
     MpqArchive, MpqBlockEntry, MpqCompressionType, MpqError, MpqFileFlags, MpqFormatVersion,
     MpqHashEntry, MpqHashType, MpqHeader,
 };
-pub use crate::core::network::connection::{Connection, ConnectionEvent};
+pub use crate::core::network::connection::{
+    Connection, ConnectionEvent, ConnectionTransportWarning,
+};
 pub use crate::core::network::d2gs::D2GSPacket;
 pub use crate::core::object::item::{
     Item, ItemAction, ItemAffixPair, ItemBufferCoord, ItemBufferId, ItemCategory, ItemCode,

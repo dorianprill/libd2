@@ -1,18 +1,20 @@
 # libd2r Report
 
-Last updated: 2026-06-05
+Last updated: 2026-06-06
 
 ## Current Status
 
 The repository contains an early Rust implementation of a passive Diablo II
-state reconstruction library. Network capture, legacy D2GS payload routing,
-packet framing, typed server-message parsing for a first subset, `GameState`
-mutation, and callback events are now wired together through the `Client` and
-`Connection` facades. The plain legacy D2GS packet stream path is covered by tests;
-compressed D2GS/Huffman support has tables and code scaffolding but still needs
-captured fixture tests before it should be treated as production-supported.
-D2R/modern Battle.net port `1119` is classified as encrypted/unknown transport
-and is not routed into the legacy D2GS reader.
+state reconstruction library. Network capture, ordered legacy D2GS TCP stream
+reconstruction, D2GS payload routing, packet framing, typed server-message
+parsing for a first subset, `GameState` mutation, and callback events are now
+wired together through the `Client` and `Connection` facades. The plain legacy
+D2GS packet stream path is covered by tests. Compressed D2GS/Huffman support now
+tracks `0xAF` compression mode, handles one-byte chunk headers, buffers split
+compressed chunks, and has a Blacha-derived fixture test; it still needs more
+captured live compressed fixtures before broad support is claimed. D2R/modern
+Battle.net port `1119` is classified as encrypted/unknown transport and is not
+routed into the legacy D2GS reader.
 
 The crate also has read-only/static-data foundations: a raw-preserving `.d2s`
 loader/saver with legacy, D2R, and Reign of the Warlock detection paths; a
@@ -28,7 +30,7 @@ The crate now resolves dependencies and passes:
 cargo test
 ```
 
-The current suite has 96 unit tests.
+The current suite has 106 unit tests.
 
 ## Work Completed
 
@@ -245,6 +247,25 @@ The current suite has 96 unit tests.
   `GameState` snapshots to a UI thread.
 - Added fixture-style tests for successful callback/event state mutation,
   parse-error reporting, and the client facade payload replay path.
+- Added a bounded server-to-client TCP stream reassembler for live legacy D2GS
+  capture. It keys streams by source/destination IP and port, trims duplicate
+  retransmission overlap, buffers out-of-order segments until gaps fill, resets
+  higher-level D2GS state when a missing gap exceeds limits, and resets on
+  connection changes or TCP SYN/RST/FIN lifecycle events.
+- Added `ConnectionTransportWarning` and `ConnectionEvent::TransportWarning` so
+  overlay tools can log and count TCP duplicates, overlaps, out-of-order gaps,
+  bounded resets, and D2GS payload buffering instead of appearing to freeze with
+  no diagnostic output.
+- Fixed the Huffman decoder to use the 32-bit wrapping accumulator semantics
+  used by the reference TypeScript implementation. Added a Blacha one-byte
+  header fixture that decodes to `0x01 GameFlags` plus `0x00 GameLoading`.
+- Updated `D2GSReader` to track `0xAF` compression mode, parse one-byte
+  compressed chunk headers when compression is enabled, buffer compressed chunks
+  split across TCP payloads, and expose/reset buffered D2GS state for live
+  capture recovery.
+- Added regression tests for live TCP reassembly around split D2GS packets,
+  out-of-order segments, duplicate retransmissions, compressed chunk splitting,
+  and one-byte Huffman chunk headers.
 
 ## Current Architecture Summary
 
@@ -255,6 +276,7 @@ Client::start / Client::start_with_events
   -> Connection::init
   -> Connection::listen(_with_events)(&mut GameState)
   -> Ethernet/IP/TCP/UDP filtering
+  -> TCP stream reassembly for server-to-client port 4000
   -> D2GSReader::read
   -> D2GSPacket queue
   -> ServerMessage::parse
@@ -296,8 +318,9 @@ MPQ bytes
   or already-decoded plaintext fixtures.
 - Item action packet support decodes packet-time fields, but full stat-list
   interpretation still needs game-data tables such as `ItemStatCost.txt`.
-- The compressed D2GS/Huffman path has implementation scaffolding but lacks
-  captured fixture tests and should be audited before any support claim.
+- The compressed D2GS/Huffman path now has Blacha-derived fixture coverage for
+  one-byte chunk headers and split chunks, but still needs captured live LoD
+  fixtures before broad compressed-traffic support is claimed.
 - `CharacterFile` currently parses the stable header, D2R v105 progression and
   mercenary header fields, character stats, and skills. Quests, waypoints,
   NPC-introduction bytes, item records, detailed iron-golem payloads, detailed
@@ -335,8 +358,8 @@ MPQ bytes
 
 ## Recommended Next Steps
 
-1. Add captured fixture tests for compressed D2GS/Huffman decompression before
-   treating compressed legacy traffic as supported.
+1. Add captured live fixture tests for compressed D2GS/Huffman decompression
+   and TCP segmentation patterns to broaden the current Blacha-derived coverage.
 2. Expand item stat-list interpretation after game-data table loading exists,
    especially `ItemStatCost.txt` bit widths and parameter rules.
 3. Expand `ServerMessage::parse` with the next state-relevant variable-length
@@ -436,7 +459,7 @@ MPQ bytes
 cargo test
 ```
 
-Result: passed. 96 tests.
+Result: passed. 106 tests.
 
 ```text
 cargo fmt --check
