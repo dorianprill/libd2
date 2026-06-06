@@ -275,6 +275,21 @@ impl MapGeneratorProfile {
             Self::Lod114d => "LoD 1.14d",
         }
     }
+
+    /// Stable lowercase label used in fixture metadata.
+    pub const fn fixture_label(self) -> &'static str {
+        match self {
+            Self::Lod114d => "lod_1_14d",
+        }
+    }
+
+    /// Parses the stable label used in fixture metadata.
+    pub fn from_fixture_label(label: &str) -> Option<Self> {
+        match label {
+            "lod_1_14d" => Some(Self::Lod114d),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for MapGeneratorProfile {
@@ -384,6 +399,467 @@ impl fmt::Display for NativeMapGenerationError {
 }
 
 impl std::error::Error for NativeMapGenerationError {}
+
+/// Diablo II's map-generation random stream.
+///
+/// The legacy engine uses a 32-bit multiply-with-carry generator in several
+/// gameplay systems, including DRLG map layout. The seed half is multiplied by
+/// `0x6AC690C5`, the carry half is added, the low 32 bits become the next seed,
+/// and the high 32 bits become the next carry. Public reverse-engineering
+/// notes and D2BS offsets refer to this helper as `D2GAME_Rand`/`D2Rand`.
+///
+/// This type is intentionally tiny: area generators should own their local
+/// stream state explicitly instead of hiding seed advancement in global state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DrlgSeed {
+    seed: u32,
+    carry: u32,
+}
+
+impl DrlgSeed {
+    /// Initial carry used by the legacy game when a map seed is expanded.
+    pub const INITIAL_CARRY: u32 = 666;
+
+    const MULTIPLIER: u64 = 0x6AC6_90C5;
+
+    /// Creates a DRLG random stream from the packet/save map seed.
+    pub const fn new(seed: u32) -> Self {
+        Self {
+            seed,
+            carry: Self::INITIAL_CARRY,
+        }
+    }
+
+    /// Creates a stream from an explicit seed/carry pair.
+    ///
+    /// This is mainly useful for fixtures that capture intermediate engine
+    /// state. Normal map-generation code should start from [`DrlgSeed::new`].
+    pub const fn from_parts(seed: u32, carry: u32) -> Self {
+        Self { seed, carry }
+    }
+
+    /// Current low 32-bit seed value.
+    pub const fn seed(self) -> u32 {
+        self.seed
+    }
+
+    /// Current high 32-bit carry value.
+    pub const fn carry(self) -> u32 {
+        self.carry
+    }
+
+    /// Current packed state as `carry << 32 | seed`.
+    pub const fn packed_state(self) -> u64 {
+        ((self.carry as u64) << 32) | self.seed as u64
+    }
+
+    /// Advances the stream and returns the new seed half.
+    pub fn next_u32(&mut self) -> u32 {
+        let product = (self.seed as u64)
+            .wrapping_mul(Self::MULTIPLIER)
+            .wrapping_add(self.carry as u64);
+        self.seed = product as u32;
+        self.carry = (product >> 32) as u32;
+        self.seed
+    }
+
+    /// Advances the stream and returns `next_u32() % upper_bound`.
+    ///
+    /// The game helper is used with positive, usually small, bounds. A bound of
+    /// zero returns zero so callers can mirror the defensive legacy behavior
+    /// without panicking.
+    pub fn next_bounded(&mut self, upper_bound: u32) -> u32 {
+        if upper_bound == 0 {
+            return 0;
+        }
+
+        self.next_u32() % upper_bound
+    }
+
+    /// Advances the stream `count` times.
+    pub fn advance(&mut self, count: usize) {
+        for _ in 0..count {
+            self.next_u32();
+        }
+    }
+}
+
+/// Fixture metadata plus one normalized generated map.
+///
+/// Native map generation should be tested against captured/generated outputs
+/// that state exactly which profile, seed, difficulty, act, and area produced
+/// the map. This wrapper parses that metadata and then reuses
+/// [`MapGenerationRequest`] normalization so fixture mistakes fail before a
+/// generator comparison runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MapGenerationFixture {
+    profile: MapGeneratorProfile,
+    source: String,
+    request: MapGenerationRequest,
+    map: GeneratedMap,
+}
+
+impl MapGenerationFixture {
+    /// Parses a map-generation fixture JSON document.
+    ///
+    /// The expected shape is:
+    ///
+    /// ```text
+    /// {
+    ///   "profile": "lod_1_14d",
+    ///   "source": "...",
+    ///   "seed": 906454380,
+    ///   "difficulty": 2,
+    ///   "act": 1,
+    ///   "area": 74,
+    ///   "level": { ... generated-map level JSON ... }
+    /// }
+    /// ```
+    pub fn from_json(input: &str) -> Result<Self, MapGenerationFixtureError> {
+        let fixture: MapgenFixture = serde_json::from_str(input)?;
+        let profile = MapGeneratorProfile::from_fixture_label(&fixture.profile)
+            .ok_or_else(|| MapGenerationFixtureError::InvalidProfile(fixture.profile.clone()))?;
+        let seed = u32::try_from(fixture.seed)
+            .map_err(|_| MapGenerationFixtureError::InvalidSeed(fixture.seed))?;
+        let difficulty_value = u8::try_from(fixture.difficulty)
+            .map_err(|_| MapGenerationFixtureError::InvalidDifficulty(fixture.difficulty))?;
+        let difficulty = Difficulty::from_packet_value(difficulty_value).ok_or(
+            MapGenerationFixtureError::InvalidDifficulty(fixture.difficulty),
+        )?;
+        let area_id = u16::try_from(fixture.area)
+            .map_err(|_| MapGenerationFixtureError::InvalidArea(fixture.area))?;
+        let area =
+            Area::from_id(area_id).ok_or(MapGenerationFixtureError::InvalidArea(fixture.area))?;
+        let request = MapGenerationRequest::for_area(seed, difficulty, area)?;
+
+        if fixture.act != request.generator_act() as i64 {
+            return Err(MapGenerationFixtureError::Map(
+                MapGenerationError::ResponseActMismatch {
+                    expected: request.generator_act(),
+                    actual: fixture.act,
+                },
+            ));
+        }
+
+        let map = GeneratedMap::try_from(fixture.level)?;
+        let map = request.validate_generated_map(map)?;
+
+        Ok(Self {
+            profile,
+            source: fixture.source,
+            request,
+            map,
+        })
+    }
+
+    pub fn profile(&self) -> MapGeneratorProfile {
+        self.profile
+    }
+
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    pub fn request(&self) -> MapGenerationRequest {
+        self.request
+    }
+
+    pub fn map(&self) -> &GeneratedMap {
+        &self.map
+    }
+
+    pub fn into_map(self) -> GeneratedMap {
+        self.map
+    }
+}
+
+/// Error returned while parsing generated-map fixture metadata.
+#[derive(Debug)]
+pub enum MapGenerationFixtureError {
+    Json(serde_json::Error),
+    InvalidProfile(String),
+    InvalidSeed(u64),
+    InvalidDifficulty(u64),
+    InvalidArea(u64),
+    Request(MapGenerationRequestError),
+    Map(MapGenerationError),
+}
+
+impl fmt::Display for MapGenerationFixtureError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Json(error) => write!(formatter, "failed to parse map fixture JSON: {}", error),
+            Self::InvalidProfile(profile) => {
+                write!(formatter, "invalid map fixture profile {}", profile)
+            }
+            Self::InvalidSeed(seed) => write!(formatter, "invalid map fixture seed {}", seed),
+            Self::InvalidDifficulty(difficulty) => {
+                write!(formatter, "invalid map fixture difficulty {}", difficulty)
+            }
+            Self::InvalidArea(area) => write!(formatter, "invalid map fixture area {}", area),
+            Self::Request(error) => write!(formatter, "invalid map fixture request: {}", error),
+            Self::Map(error) => write!(formatter, "invalid map fixture output: {}", error),
+        }
+    }
+}
+
+impl std::error::Error for MapGenerationFixtureError {}
+
+impl From<serde_json::Error> for MapGenerationFixtureError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Json(error)
+    }
+}
+
+impl From<MapGenerationRequestError> for MapGenerationFixtureError {
+    fn from(error: MapGenerationRequestError) -> Self {
+        Self::Request(error)
+    }
+}
+
+impl From<MapGenerationError> for MapGenerationFixtureError {
+    fn from(error: MapGenerationError) -> Self {
+        Self::Map(error)
+    }
+}
+
+impl From<GeneratedMapJsonError> for MapGenerationFixtureError {
+    fn from(error: GeneratedMapJsonError) -> Self {
+        Self::Map(MapGenerationError::GeneratedMap(error))
+    }
+}
+
+/// One decoded room template entry from a Tower Cellar levelgraph record.
+///
+/// emmericp's `diablo2-maps` exports Tower Cellar levels 1 through 4 as eight
+/// compact room slots. The room encoding is not the full map; it is a
+/// deterministic fixture-friendly summary of room cell, room id, variant, and
+/// grave-mask metadata extracted from D2's initialized `Room2` graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TowerCellarRoom {
+    room_id: u16,
+    variant: u8,
+    graves: u8,
+}
+
+impl TowerCellarRoom {
+    /// Decodes emmericp's two-byte Tower Cellar room encoding.
+    pub fn from_encoded(encoded: u16) -> Self {
+        let low = (encoded & 0x00ff) as u8;
+        let high = (encoded >> 8) as u8;
+        Self {
+            room_id: u16::from(high & 0x7f) + 100,
+            variant: (high >> 7) & 1,
+            graves: low,
+        }
+    }
+
+    /// Encodes the room metadata back into emmericp's two-byte representation.
+    pub fn encode(self) -> u16 {
+        let high = ((self.variant & 1) << 7) | ((self.room_id - 100) as u8 & 0x7f);
+        u16::from(self.graves) | (u16::from(high) << 8)
+    }
+
+    pub fn room_id(self) -> u16 {
+        self.room_id
+    }
+
+    pub fn variant(self) -> u8 {
+        self.variant
+    }
+
+    pub fn graves(self) -> u8 {
+        self.graves
+    }
+
+    /// Returns true for room ids present in emmericp's Tower Cellar table.
+    pub fn is_known_room_id(room_id: u16) -> bool {
+        matches!(
+            room_id,
+            109 | 110
+                | 111
+                | 112
+                | 113
+                | 114
+                | 115
+                | 116
+                | 117
+                | 118
+                | 119
+                | 120
+                | 121
+                | 122
+                | 123
+                | 124
+                | 125
+                | 126
+                | 127
+                | 128
+                | 129
+                | 130
+                | 131
+                | 132
+                | 133
+                | 134
+                | 135
+                | 136
+                | 137
+                | 139
+                | 140
+                | 141
+                | 142
+                | 143
+                | 144
+                | 145
+                | 146
+        )
+    }
+}
+
+/// One occupied cell in a Tower Cellar levelgraph record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TowerCellarRoomSlot {
+    cell_x: u8,
+    cell_y: u8,
+    room: TowerCellarRoom,
+}
+
+impl TowerCellarRoomSlot {
+    /// Builds a room slot for a 4-bit `(cell_x, cell_y)` graph position.
+    pub const fn new(cell_x: u8, cell_y: u8, room: TowerCellarRoom) -> Option<Self> {
+        if cell_x < 16 && cell_y < 16 {
+            Some(Self {
+                cell_x,
+                cell_y,
+                room,
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn cell_x(self) -> u8 {
+        self.cell_x
+    }
+
+    pub fn cell_y(self) -> u8 {
+        self.cell_y
+    }
+
+    pub fn room(self) -> TowerCellarRoom {
+        self.room
+    }
+
+    fn position_byte(self) -> u8 {
+        (self.cell_y << 4) | self.cell_x
+    }
+}
+
+/// Decoded Tower Cellar levelgraph record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TowerCellarLevelGraph {
+    rooms: Vec<TowerCellarRoomSlot>,
+}
+
+impl TowerCellarLevelGraph {
+    pub const MAX_ROOMS: usize = 8;
+    pub const RECORD_SIZE: usize = Self::MAX_ROOMS * 3;
+
+    /// Decodes one fixed-size Tower Cellar levelgraph record.
+    ///
+    /// Each record has eight 3-byte slots. Occupied slots store
+    /// `(cell_y << 4) | cell_x` followed by a little-endian
+    /// [`TowerCellarRoom`] encoding. Unused slots are exactly `FF FF FF`.
+    pub fn from_levelgraph_record(record: &[u8]) -> Result<Self, TowerCellarLevelGraphError> {
+        if record.len() != Self::RECORD_SIZE {
+            return Err(TowerCellarLevelGraphError::InvalidRecordLength {
+                expected: Self::RECORD_SIZE,
+                actual: record.len(),
+            });
+        }
+
+        let mut rooms = Vec::new();
+        for (slot, bytes) in record.chunks_exact(3).enumerate() {
+            let position = bytes[0];
+            let encoded = u16::from_le_bytes([bytes[1], bytes[2]]);
+
+            if position == 0xff || encoded == 0xffff {
+                if position == 0xff && encoded == 0xffff {
+                    continue;
+                }
+
+                return Err(TowerCellarLevelGraphError::MalformedSlot { slot });
+            }
+
+            let room = TowerCellarRoom::from_encoded(encoded);
+            if !TowerCellarRoom::is_known_room_id(room.room_id()) {
+                return Err(TowerCellarLevelGraphError::UnknownRoomId {
+                    slot,
+                    room_id: room.room_id(),
+                });
+            }
+
+            let cell_x = position & 0x0f;
+            let cell_y = position >> 4;
+            let room_slot = TowerCellarRoomSlot::new(cell_x, cell_y, room)
+                .expect("nibble-split cell coordinates are always below 16");
+            rooms.push(room_slot);
+        }
+
+        Ok(Self { rooms })
+    }
+
+    pub fn rooms(&self) -> &[TowerCellarRoomSlot] {
+        &self.rooms
+    }
+
+    /// Encodes the graph back into the fixed 24-byte fixture record.
+    pub fn to_levelgraph_record(&self) -> [u8; Self::RECORD_SIZE] {
+        let mut record = [0xff; Self::RECORD_SIZE];
+        for (slot, room) in self.rooms.iter().take(Self::MAX_ROOMS).enumerate() {
+            let offset = slot * 3;
+            let encoded = room.room().encode().to_le_bytes();
+            record[offset] = room.position_byte();
+            record[offset + 1] = encoded[0];
+            record[offset + 2] = encoded[1];
+        }
+        record
+    }
+}
+
+/// Error returned while decoding Tower Cellar levelgraph fixtures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TowerCellarLevelGraphError {
+    InvalidRecordLength { expected: usize, actual: usize },
+    MalformedSlot { slot: usize },
+    UnknownRoomId { slot: usize, room_id: u16 },
+}
+
+impl fmt::Display for TowerCellarLevelGraphError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidRecordLength { expected, actual } => write!(
+                formatter,
+                "Tower Cellar levelgraph record has {} bytes, expected {}",
+                actual, expected
+            ),
+            Self::MalformedSlot { slot } => {
+                write!(
+                    formatter,
+                    "Tower Cellar levelgraph slot {} is malformed",
+                    slot
+                )
+            }
+            Self::UnknownRoomId { slot, room_id } => write!(
+                formatter,
+                "Tower Cellar levelgraph slot {} uses unknown room id {}",
+                slot, room_id
+            ),
+        }
+    }
+}
+
+impl std::error::Error for TowerCellarLevelGraphError {}
 
 /// Error returned while normalizing generated-map output for a request.
 #[derive(Debug)]
@@ -626,6 +1102,17 @@ struct MapgenResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct MapgenFixture {
+    profile: String,
+    source: String,
+    seed: u64,
+    difficulty: u64,
+    act: i64,
+    area: u64,
+    level: MapgenLevel,
+}
+
+#[derive(Debug, Deserialize)]
 struct MapgenPoint {
     x: i64,
     y: i64,
@@ -822,17 +1309,37 @@ pub fn is_good_exit(source: Area, target: Area, staff_tomb: Option<Area>) -> boo
     ) || staff_tomb == Some(target)
 }
 
+/// Returns true for the Tower Cellar levels covered by the levelgraph fixture
+/// format ported from emmericp's tooling.
+///
+/// The compact levelgraph records currently describe Tower Cellar levels 1
+/// through 4. Tower Cellar Level 5 has special Countess/end-room behavior and
+/// should get its own fixture contract when that area is ported.
+pub fn is_tower_cellar_levelgraph_area(area: Area) -> bool {
+    matches!(
+        area,
+        Area::TowerCellarLevel1
+            | Area::TowerCellarLevel2
+            | Area::TowerCellarLevel3
+            | Area::TowerCellarLevel4
+    )
+}
+
 #[cfg(test)]
 mod tests {
+    use serde::Deserialize;
+
     use crate::core::act::Act;
     use crate::core::area::Area;
     use crate::core::game_state::Difficulty;
 
     use super::{
-        act_from_level_id, expand_rle_row, is_good_exit, is_valid_map_seed, rle_row_is_blocked,
-        CollisionGrid, GeneratedMap, GeneratedMapJsonError, MapGenerationError,
-        MapGenerationRequest, MapGenerationRequestError, MapGeneratorProfile, MapObjectKind,
-        MapSeed, NativeMapGenerationError, NativeMapGenerator,
+        act_from_level_id, expand_rle_row, is_good_exit, is_tower_cellar_levelgraph_area,
+        is_valid_map_seed, rle_row_is_blocked, CollisionGrid, DrlgSeed, GeneratedMap,
+        GeneratedMapJsonError, MapGenerationError, MapGenerationFixture, MapGenerationRequest,
+        MapGenerationRequestError, MapGeneratorProfile, MapObjectKind, MapSeed,
+        NativeMapGenerationError, NativeMapGenerator, TowerCellarLevelGraph,
+        TowerCellarLevelGraphError, TowerCellarRoom,
     };
 
     #[test]
@@ -841,6 +1348,30 @@ mod tests {
         assert!(is_valid_map_seed(0x3607_656c));
         assert!(!is_valid_map_seed(0));
         assert!(!is_valid_map_seed(u32::MAX));
+    }
+
+    #[test]
+    fn drlg_seed_matches_lod_multiply_with_carry_vectors() {
+        let mut seed = DrlgSeed::new(0x1234_5678);
+
+        assert_eq!(seed.carry(), DrlgSeed::INITIAL_CARRY);
+        assert_eq!(seed.next_u32(), 0x03ba_0cf2);
+        assert_eq!(seed.carry(), 0x0797_ca94);
+        assert_eq!(seed.next_u32(), 0xc437_e0ce);
+        assert_eq!(seed.carry(), 0x018d_ed5d);
+        assert_eq!(seed.next_u32(), 0x9a55_cbe3);
+        assert_eq!(seed.carry(), 0x51d7_5543);
+    }
+
+    #[test]
+    fn drlg_seed_bounded_values_advance_like_legacy_helper() {
+        let mut seed = DrlgSeed::new(0x1234_5678);
+
+        assert_eq!(seed.next_bounded(100), 58);
+        assert_eq!(seed.next_bounded(100), 66);
+        assert_eq!(seed.next_bounded(100), 19);
+        assert_eq!(seed.next_bounded(0), 0);
+        assert_eq!(seed.next_bounded(100), 54);
     }
 
     #[test]
@@ -898,6 +1429,11 @@ mod tests {
 
         assert_eq!(generator.profile(), MapGeneratorProfile::Lod114d);
         assert_eq!(generator.profile().patch_label(), "LoD 1.14d");
+        assert_eq!(generator.profile().fixture_label(), "lod_1_14d");
+        assert_eq!(
+            MapGeneratorProfile::from_fixture_label("lod_1_14d"),
+            Some(MapGeneratorProfile::Lod114d)
+        );
     }
 
     #[test]
@@ -920,6 +1456,89 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "native LoD 1.14d map generation does not support area Arcane Sanctuary yet"
+        );
+    }
+
+    #[test]
+    fn map_generation_fixture_json_validates_profile_and_request_metadata() {
+        let fixture = MapGenerationFixture::from_json(include_str!(
+            "../../tests/fixtures/mapgen/lod_1_14d/arcane_sanctuary_0x3607656c_hell.json"
+        ))
+        .expect("fixture should parse");
+
+        assert_eq!(fixture.profile(), MapGeneratorProfile::Lod114d);
+        assert!(fixture.source().contains("libd2"));
+        assert_eq!(fixture.request().generator_seed(), 0x3607_656c);
+        assert_eq!(fixture.request().difficulty(), Difficulty::Hell);
+        assert_eq!(fixture.request().area(), Area::ArcaneSanctuary);
+        assert_eq!(fixture.map().id, Area::ArcaneSanctuary as u16);
+        assert_eq!(fixture.map().objects.len(), 2);
+        assert_eq!(fixture.map().is_blocked(1, 0), Some(false));
+    }
+
+    #[test]
+    fn tower_cellar_levelgraph_fixture_decodes_room_slots() {
+        let fixture = TowerLevelGraphFixture::from_json(include_str!(
+            "../../tests/fixtures/mapgen/lod_1_14d/tower_cellar_levelgraph_record.json"
+        ));
+        let graph = TowerCellarLevelGraph::from_levelgraph_record(&fixture.record)
+            .expect("levelgraph record should decode");
+
+        assert_eq!(fixture.profile, "lod_1_14d");
+        assert!(fixture.source.contains("levelgraph"));
+        assert_eq!(fixture.seed, 0x3607_656c);
+        assert_eq!(fixture.difficulty, 0);
+        assert_eq!(fixture.act, 0);
+        assert_eq!(fixture.area, Area::TowerCellarLevel1 as u16);
+        assert!(is_tower_cellar_levelgraph_area(
+            Area::from_id(fixture.area).expect("fixture area should exist")
+        ));
+        assert_eq!(graph.rooms().len(), 3);
+
+        let first = graph.rooms()[0];
+        assert_eq!((first.cell_x(), first.cell_y()), (0, 0));
+        assert_eq!(first.room().room_id(), 109);
+        assert_eq!(first.room().variant(), 0);
+        assert_eq!(first.room().graves(), 0x15);
+
+        let second = graph.rooms()[1];
+        assert_eq!((second.cell_x(), second.cell_y()), (1, 1));
+        assert_eq!(second.room().room_id(), 111);
+        assert_eq!(second.room().variant(), 1);
+        assert_eq!(second.room().graves(), 0x0a);
+
+        assert_eq!(graph.to_levelgraph_record().as_slice(), fixture.record);
+    }
+
+    #[test]
+    fn tower_cellar_levelgraph_rejects_malformed_slots_and_unknown_rooms() {
+        let malformed = [0xff, 0x00, 0x27];
+        assert_eq!(
+            TowerCellarLevelGraph::from_levelgraph_record(&malformed),
+            Err(TowerCellarLevelGraphError::InvalidRecordLength {
+                expected: TowerCellarLevelGraph::RECORD_SIZE,
+                actual: malformed.len(),
+            })
+        );
+
+        let mut record = [0xff; TowerCellarLevelGraph::RECORD_SIZE];
+        record[0] = 0xff;
+        record[1] = 0x00;
+        record[2] = 0x27;
+        assert_eq!(
+            TowerCellarLevelGraph::from_levelgraph_record(&record),
+            Err(TowerCellarLevelGraphError::MalformedSlot { slot: 0 })
+        );
+
+        let unknown_room = TowerCellarRoom::from_encoded(0x0100);
+        record[0] = 0x00;
+        record[1..3].copy_from_slice(&unknown_room.encode().to_le_bytes());
+        assert_eq!(
+            TowerCellarLevelGraph::from_levelgraph_record(&record),
+            Err(TowerCellarLevelGraphError::UnknownRoomId {
+                slot: 0,
+                room_id: 101,
+            })
         );
     }
 
@@ -958,6 +1577,14 @@ mod tests {
             Some(Area::TalRashasTomb4)
         ));
         assert!(!is_good_exit(Area::ColdPlains, Area::BurialGrounds, None));
+    }
+
+    #[test]
+    fn classifies_tower_cellar_levelgraph_area_family() {
+        assert!(is_tower_cellar_levelgraph_area(Area::TowerCellarLevel1));
+        assert!(is_tower_cellar_levelgraph_area(Area::TowerCellarLevel4));
+        assert!(!is_tower_cellar_levelgraph_area(Area::TowerCellarLevel5));
+        assert!(!is_tower_cellar_levelgraph_area(Area::ForgottenTower));
     }
 
     #[test]
@@ -1102,5 +1729,54 @@ mod tests {
                 [1, 5, 1]
             ]
         }"#
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct TowerLevelGraphFixture {
+        profile: String,
+        source: String,
+        seed: u32,
+        difficulty: u8,
+        act: u8,
+        area: u16,
+        #[serde(rename = "record_hex", deserialize_with = "hex_bytes")]
+        record: Vec<u8>,
+    }
+
+    impl TowerLevelGraphFixture {
+        fn from_json(input: &str) -> Self {
+            serde_json::from_str(input).expect("tower levelgraph fixture JSON should parse")
+        }
+    }
+
+    fn hex_bytes<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        decode_hex_bytes(&value).map_err(serde::de::Error::custom)
+    }
+
+    fn decode_hex_bytes(input: &str) -> Result<Vec<u8>, String> {
+        let mut compact = String::new();
+        for character in input.chars() {
+            if character.is_ascii_hexdigit() {
+                compact.push(character);
+            }
+        }
+
+        if compact.len() % 2 != 0 {
+            return Err("hex fixture has an odd number of digits".to_string());
+        }
+
+        compact
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| {
+                let text =
+                    std::str::from_utf8(pair).map_err(|error| format!("invalid UTF-8: {error}"))?;
+                u8::from_str_radix(text, 16).map_err(|error| format!("invalid hex byte: {error}"))
+            })
+            .collect()
     }
 }

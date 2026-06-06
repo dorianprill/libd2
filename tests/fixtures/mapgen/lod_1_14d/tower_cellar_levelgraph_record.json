@@ -1,0 +1,9 @@
+{
+  "profile": "lod_1_14d",
+  "source": "synthetic fixture for emmericp/diablo2-maps Tower Cellar levelgraph wire format; validates parser and fixture plumbing only",
+  "seed": 906454380,
+  "difficulty": 0,
+  "act": 0,
+  "area": 21,
+  "record_hex": "00 15 09  11 0a 8b  21 00 27  ff ff ff  ff ff ff  ff ff ff  ff ff ff  ff ff ff"
+}

@@ -1,0 +1,40 @@
+{
+  "profile": "lod_1_14d",
+  "source": "libd2 fixture harness sample using the external mapgen JSON contract; replace with D2-runtime extractor output before claiming generator compatibility",
+  "seed": 906454380,
+  "difficulty": 2,
+  "act": 1,
+  "area": 74,
+  "level": {
+    "type": "map",
+    "id": 74,
+    "name": "Arcane Sanctuary",
+    "offset": { "x": 25000, "y": 5000 },
+    "size": { "width": 7, "height": 3 },
+    "objects": [
+      {
+        "id": 53,
+        "type": "exit",
+        "x": 137,
+        "y": 0,
+        "name": "Palace Cellar Level 2",
+        "isGoodExit": true
+      },
+      {
+        "id": 402,
+        "type": "object",
+        "x": 449,
+        "y": 449,
+        "name": "Waypoint",
+        "op": 23,
+        "class": "waypoint"
+      }
+    ],
+    "map": [
+      [1, 5, 1],
+      [2, 3, 2],
+      [1, 5, 1]
+    ]
+  }
+}
+

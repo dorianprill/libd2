@@ -26,11 +26,12 @@ pub use crate::core::inventory::{
     GridSize, InventoryProfile, ItemParent, ItemPosition, StoredItemContainer,
 };
 pub use crate::core::map::{
-    act_for_area, act_from_level_id, expand_rle_row, is_good_exit, is_valid_map_seed,
-    rle_row_is_blocked, CollisionFlag, CollisionGrid, GeneratedMap, GeneratedMapJsonError,
-    MapGenerationError, MapGenerationRequest, MapGenerationRequestError, MapGeneratorProfile,
-    MapObject, MapObjectKind, MapPoint, MapSeed, MapSize, NativeMapGenerationError,
-    NativeMapGenerator,
+    act_for_area, act_from_level_id, expand_rle_row, is_good_exit, is_tower_cellar_levelgraph_area,
+    is_valid_map_seed, rle_row_is_blocked, CollisionFlag, CollisionGrid, DrlgSeed, GeneratedMap,
+    GeneratedMapJsonError, MapGenerationError, MapGenerationFixture, MapGenerationFixtureError,
+    MapGenerationRequest, MapGenerationRequestError, MapGeneratorProfile, MapObject, MapObjectKind,
+    MapPoint, MapSeed, MapSize, NativeMapGenerationError, NativeMapGenerator,
+    TowerCellarLevelGraph, TowerCellarLevelGraphError, TowerCellarRoom, TowerCellarRoomSlot,
 };
 pub use crate::core::mpq::{
     decrypt_mpq_block, decrypt_mpq_block_range, encryption_table, mpq_decryption_key, mpq_hash,

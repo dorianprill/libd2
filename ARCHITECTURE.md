@@ -465,9 +465,15 @@ maps:
 - `GeneratedMap`, `MapObject`, `MapPoint`, and `MapSize`
 - generated-map JSON normalization for both single-level output and wrapped
   generator responses containing `seed`, `difficulty`, `act`, and `levels`
+- `MapGenerationFixture` metadata parsing for profile/seed/difficulty/act/area
+  fixture files
 - `MapGeneratorProfile`, `NativeMapGenerator`, and
   `NativeMapGenerationError` as the public boundary for a native Rust
   seed-to-map generator
+- `DrlgSeed`, the LoD multiply-with-carry random stream used as the first
+  deterministic primitive for native map generation
+- `TowerCellarLevelGraph`, `TowerCellarRoom`, and `TowerCellarRoomSlot` for
+  decoding emmericp's compact Tower Cellar room-graph fixture format
 - `CollisionGrid` over Blaine's alternating filled/open run-length rows
 - row expansion and point collision queries
 - level-id to act lookup
@@ -483,6 +489,13 @@ the public resources, but libd2 treats that as a fixture question rather than a
 compatibility guarantee. The current `NativeMapGenerator::lod_1_14d` facade
 returns `UnsupportedArea` for every area until individual area families are
 ported and checked against LoD 1.14d fixture output.
+
+The first native-generation primitives are now in place. `DrlgSeed` implements
+the legacy multiply-with-carry `D2Rand` stream. The fixture harness parses
+versioned map-output metadata, and the Tower Cellar levelgraph parser decodes
+the eight-slot compact record used by emmericp's tooling for Tower Cellar
+levels 1 through 4. This is not full Tower Cellar generation yet; it is the
+comparison format the first area-family port can target.
 
 The local resource audit is important for expectations: Blaine's
 `packages/map` and emmericp's `diablo2-maps` are both excellent references for

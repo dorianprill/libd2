@@ -21,10 +21,13 @@ loader/saver with legacy, D2R, and Reign of the Warlock detection paths; a
 read-only MPQ v1 archive extractor for Classic/LoD installs; typed `.tbl`/`.bin`
 static-data loading for monster, object, level, and item-name resolution; and
 generated-map/collision data structures. A native map-generator facade now
-targets LoD 1.14d explicitly, but every area still reports unsupported until a
-fixture-backed area-family port lands. Native seed-to-layout generation,
-pathfinding, DS1/DT1 map asset ingestion, full item stat-list interpretation,
-and save editing remain future work.
+targets LoD 1.14d explicitly, and the first DRLG primitive/fixture layer is in
+place: the LoD multiply-with-carry random stream, versioned map fixture
+metadata, and Tower Cellar levelgraph record parsing. Every area still reports
+unsupported from `NativeMapGenerator` until a true seed-to-layout area-family
+port lands. Native seed-to-layout generation, pathfinding, DS1/DT1 map asset
+ingestion, full item stat-list interpretation, and save editing remain future
+work.
 
 The crate now resolves dependencies and passes:
 
@@ -32,7 +35,7 @@ The crate now resolves dependencies and passes:
 cargo test
 ```
 
-The current suite has 109 unit tests.
+The current suite has 115 unit tests.
 
 ## Work Completed
 
@@ -258,6 +261,19 @@ The current suite has 109 unit tests.
   current generator returns `UnsupportedArea` for every area by design, so
   consumers can wire against a stable call site before individual area families
   are ported.
+- Added `DrlgSeed`, a documented Rust implementation of the LoD
+  multiply-with-carry random stream used by D2's `D2Rand`/`D2GAME_Rand` helper.
+  It is covered by fixed vectors and bounded-value advancement tests.
+- Added `MapGenerationFixture` and a versioned `tests/fixtures/mapgen`
+  directory so generated-map outputs carry explicit profile, seed, difficulty,
+  act, area, and source metadata before being compared to native generator
+  output.
+- Added the first narrow area-family fixture primitive for Tower Cellar:
+  `TowerCellarRoom`, `TowerCellarRoomSlot`, and `TowerCellarLevelGraph` decode
+  emmericp's eight-slot levelgraph record format for Tower Cellar levels 1
+  through 4. `is_tower_cellar_levelgraph_area` exposes that area-family
+  boundary. This is a fixture/comparison format, not the actual room-layout
+  generator yet.
 - Added `ConnectionEvent`, `Connection::listen_with_events`,
   `Connection::process_d2gs_payload`, `Client::start_with_events`, and
   `Client::process_d2gs_payload`. These APIs let overlay tools run blocking
@@ -366,8 +382,10 @@ Classic/LoD install path
   compatibility is claimed.
 - Live packet capture depends on host networking and privileges; tests should
   use byte fixtures instead.
-- Native map generation has a LoD 1.14d facade only; actual DRLG/static-layout
-  generation and pathfinding are still missing.
+- Native map generation has a LoD 1.14d facade, RNG primitive, fixture harness,
+  and Tower Cellar levelgraph parser; actual seed-to-room placement,
+  static-layout expansion, collision generation, and pathfinding are still
+  missing.
 - Current README/repository naming still refers to `libd2r` and Diablo II:
   Resurrected in places, while `AGENTS.md` describes broader Classic, Lord of
   Destruction, Resurrected, and Reign of the Warlock support.
@@ -413,10 +431,10 @@ Classic/LoD install path
 15. Add scanner-style validation helpers for D2R save invariants: checksum,
    size, stat terminator, item counts, follower count/payload length, and
    Warlock follower payload size.
-16. Port the first native LoD 1.14d area family behind
-   `NativeMapGenerator::lod_1_14d`, with fixture output from a D2-runtime
-   extractor. Tower Cellar is a good correctness scaffold; Blood Moor is the
-   most useful early gameplay/overlay target.
+16. Capture real LoD 1.14d Tower Cellar levelgraph fixtures from a D2-runtime
+   extractor, then implement seed-to-room graph generation until native output
+   matches the fixture records. After that, expand rooms into `GeneratedMap`
+   collision/objects through DS1/DT1/static data.
 17. Keep `ARCHITECTURE.md` and `REPORT.md` updated as each component becomes
    real implementation.
 
@@ -487,7 +505,7 @@ Classic/LoD install path
 cargo test
 ```
 
-Result: passed. 109 tests.
+Result: passed. 115 tests.
 
 ```text
 cargo fmt --check
