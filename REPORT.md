@@ -30,7 +30,7 @@ The crate now resolves dependencies and passes:
 cargo test
 ```
 
-The current suite has 106 unit tests.
+The current suite has 107 unit tests.
 
 ## Work Completed
 
@@ -86,6 +86,10 @@ The current suite has 106 unit tests.
   `Diablo2PacketsData` resources. `0x23` is ready for later selected-skill
   display, while `0x28` preserves the raw 96-byte quest bitstream until quest
   semantics are implemented.
+- Added LoD 1.14d-assumed parsers for `0x47 Relator1` and `0x48 Relator2`.
+  Live captures and blacha/diablo2 show these as paired 11-byte unit relator
+  envelopes; they are parsed but state-neutral until a concrete gameplay
+  semantic is established.
 - Hardened the live pnet receive loop so malformed Ethernet/point-to-point IP
   frames and one-off receive errors are skipped instead of panicking the capture
   worker.
@@ -459,7 +463,7 @@ MPQ bytes
 cargo test
 ```
 
-Result: passed. 106 tests.
+Result: passed. 107 tests.
 
 ```text
 cargo fmt --check

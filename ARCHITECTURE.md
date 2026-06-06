@@ -212,6 +212,8 @@ subset:
 0x23,
 0x28,
 0x3E,
+0x47,
+0x48,
 0x4C,
 0x4D,
 0x51,
@@ -242,9 +244,9 @@ object removal/handshake, movement/state basics, local HP/MP/stamina bitstreams,
 simple stat and experience
 updates, world objects, darkness/event envelopes, player assignment/join/left
 and player-map updates, NPC movement/state/heal, trade/pong/status envelopes,
-fixed item-state flag updates, variable-length monster assignment, variable
-item stat-update envelopes, world/owned item action envelopes, state ending, and
-compression/termination signals.
+fixed item-state flag updates, state-neutral relator envelopes, variable-length
+monster assignment, variable item stat-update envelopes, world/owned item action
+envelopes, state ending, and compression/termination signals.
 
 Item action packet envelopes are parsed by `ServerMessage`, but the item
 bitstream itself is owned by `core::object::item`. That module currently decodes
@@ -510,7 +512,7 @@ behavior and should remain optional.
 
 - `ServerMessage::parse` covers a first fixed-size subset plus variable-length
   NPC assignment, player join, item stat-update envelopes, item action packets,
-  and live-observed plain D2GS packet bursts.
+  relator envelopes, and live-observed plain D2GS packet bursts.
 - Compressed D2GS/Huffman decoding still lacks captured fixture validation.
 - `GameState::update` only handles the parsed state-relevant subset so far.
 - D2R/modern Battle.net port `1119` is intentionally classified as

@@ -343,18 +343,28 @@ pub enum ServerMessage {
 
     Unused23 = 0x46,
 
+    /// Unit relator notification.
+    ///
+    /// Packet tables name `0x47` and `0x48` as relators and describe the
+    /// payload as a 16-bit unit-type-ish parameter, a unit GUID, and a trailing
+    /// 32-bit parameter. Live LoD 1.14d captures commonly emit paired relators
+    /// for player ids with the trailing parameter set to zero. Resource
+    /// projects such as blacha/diablo2 currently parse but ignore them for
+    /// state reconstruction, so libd2 exposes the envelope without assigning
+    /// gameplay semantics yet.
     Relator1 {
         unit_type: u8,
         gap: u8,
         unit_id: u32,
-        param2: u32, // FIXME is this two or four bytes?
+        param2: u32,
     } = 0x47,
 
+    /// Second unit relator notification; see [`ServerMessage::Relator1`].
     Relator2 {
         unit_type: u8,
         gap: u8,
         unit_id: u32,
-        param2: u32, // FIXME is this two or four bytes?
+        param2: u32,
     } = 0x48,
 
     Unused24 = 0x49,
@@ -1320,6 +1330,24 @@ impl ServerMessage {
                     bitstream: remaining[..bitstream_len].to_vec(),
                 })
             }
+            0x47 => {
+                let mut cursor = PacketCursor::new(input, 11)?;
+                Ok(Self::Relator1 {
+                    unit_type: cursor.u8(),
+                    gap: cursor.u8(),
+                    unit_id: cursor.u32_le(),
+                    param2: cursor.u32_le(),
+                })
+            }
+            0x48 => {
+                let mut cursor = PacketCursor::new(input, 11)?;
+                Ok(Self::Relator2 {
+                    unit_type: cursor.u8(),
+                    gap: cursor.u8(),
+                    unit_id: cursor.u32_le(),
+                    param2: cursor.u32_le(),
+                })
+            }
             0x4C => {
                 let mut cursor = PacketCursor::new(input, 16)?;
                 Ok(Self::UnitSkillOnTarget {
@@ -1871,6 +1899,33 @@ mod tests {
                 packet_id: 0x9C,
                 expected: 0x0c,
                 actual: 9,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_relator_packets_reads_unit_id_and_trailing_parameter() {
+        assert_eq!(
+            ServerMessage::parse(&[0x47, 0x00, 0x00, 0x7A, 0x94, 0xCD, 0x83, 0, 0, 0, 0])
+                .expect("relator1 should parse"),
+            ServerMessage::Relator1 {
+                unit_type: 0,
+                gap: 0,
+                unit_id: 0x83CD_947A,
+                param2: 0,
+            }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[
+                0x48, 0x01, 0x02, 0x44, 0x33, 0x22, 0x11, 0x88, 0x77, 0x66, 0x55
+            ])
+            .expect("relator2 should parse"),
+            ServerMessage::Relator2 {
+                unit_type: 1,
+                gap: 2,
+                unit_id: 0x1122_3344,
+                param2: 0x5566_7788,
             }
         );
     }
