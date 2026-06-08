@@ -60,8 +60,8 @@ src/core/
 
   character_file.rs
     conservative .d2s header parser, checksum validator, stats/skills parser,
-    item-related section-header scanner, D2R v105 header handling, and
-    raw-preserving loader/saver
+    item-related section-header scanner, D2R v105 header handling,
+    raw-preserving loader/saver, and legacy GameState-to-save export
 
   mpq.rs
     MPQ v1 header/table structs, hashing, decryption-key derivation,
@@ -224,10 +224,13 @@ subset:
 0x5C,
 0x67..0x69,
 0x6B..0x6D,
+0x75,
+0x76,
 0x77,
 0x7D,
 0x8F,
 0x90,
+0x94,
 0x95,
 0x96,
 0x9C,
@@ -282,7 +285,8 @@ coverage.
 
 - players by canonical packet id, with a small alias table for roster ids vs
   in-world unit assignment ids observed for the same character, plus a separate
-  marker for whether the current world location is known
+  marker for whether the current world location is known, and base skill levels
+  keyed by global `Skills.txt` ids from `0x94`
 - NPCs by unit id
 - world objects by unit id
 - items by unit id, including latest owner, raw item action bits, typed
@@ -297,12 +301,12 @@ coverage.
 It implements the `Update` trait with `&mut self` and mutates state for the
 currently parsed packet subset: game flags, act load/unload, map reveal/hide,
 player assignment/movement/join/left, `0x75` player-info level updates, player
-id alias coalescing, local-player HP/mana/stamina/movement verification, world
-object assignment/removal/state metadata, NPC assignment/movement/state/heal and
-death, simple local player stat/experience updates, and raw item-stat update
-preservation. Item action packets currently upsert item owner and decoded
-packet-time item state; fixed `0x7D` packets update the matching item's raw
-state flags by GUID.
+id alias coalescing, `0x94` base skill-list updates, local-player
+HP/mana/stamina/movement verification, world object assignment/removal/state
+metadata, NPC assignment/movement/state/heal and death, simple local player
+stat/experience updates, and raw item-stat update preservation. Item action
+packets currently upsert item owner and decoded packet-time item state; fixed
+`0x7D` packets update the matching item's raw state flags by GUID.
 
 Packets `0x4C UnitSkillOnTarget` and `0x4D UnitSkillOnLocation` are parsed as
 skill-use events but currently remain state-neutral. They are ready to feed a
@@ -380,6 +384,19 @@ the edition, selects an inventory profile, and preserves the original byte
 buffer. Saving currently writes back the preserved bytes after recalculating the
 file-size and checksum fields.
 
+For legacy Classic/LoD saves, `CharacterFile` also has a first export path from
+the local player in `GameState`. The standalone writer emits a LoD 1.10+ style
+fixed pre-stats block with empty hotkeys, appearance, location/mercenary bytes,
+quest metadata, waypoint metadata, and NPC-dialog metadata, then writes the
+generated `gf` stat section, the generated `if` class-skill table, empty player
+item and corpse lists, and empty expansion merc/golem markers. Skills normally
+come from `0x94 PlayerSkillsInfo` projected from global `Skills.txt` ids into
+the class-local 30-byte save table; callers can still override the table for
+fixtures or partial captures. The template overlay path rewrites only the
+header, stats, and skills in a parsed legacy save and preserves the remaining
+quest, waypoint, NPC, corpse, mercenary, item, and trailer bytes while repairing
+size and checksum.
+
 The parser intentionally starts with the stable fields shared by the public
 resources: magic, version, file size, checksum, name, status flags, class,
 level, D2R v105 progression, D2R v105 mercenary header fields, the bit-packed
@@ -394,10 +411,10 @@ Tools layout: status at `0x14`, progression at `0x15`, class at `0x18`, level
 at `0x1b`, mercenary header fields at `0xa3..0xae`, and character name at
 `0x12b`.
 
-Quest, waypoint, NPC-introduction, corpse, item, iron-golem, follower, personal
-stash, and shared stash sections should be added as separate parsers behind
-`SaveVersion` and `InventoryProfile`, because item encoding differs between
-legacy/LoD saves and Diablo II: Resurrected.
+Semantic quest, waypoint, NPC-introduction, corpse, item, iron-golem, follower,
+personal stash, and shared stash sections should be added as separate parsers
+behind `SaveVersion` and `InventoryProfile`, because item encoding differs
+between legacy/LoD saves and Diablo II: Resurrected.
 
 The current item-related scanner deliberately stops at marker/count metadata.
 It exposes parent item-list counts, the optional corpse marker, the Iron Golem

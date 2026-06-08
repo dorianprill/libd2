@@ -20,9 +20,11 @@ The crate also has read-only/static-data foundations: a raw-preserving `.d2s`
 loader/saver with legacy, D2R, and Reign of the Warlock detection paths; a
 read-only MPQ v1 archive extractor for Classic/LoD installs; typed `.tbl`/`.bin`
 static-data loading for monster, object, level, and item-name resolution; and
-generated-map/collision data structures. Native seed-to-layout map generation,
-pathfinding, DS1/DT1 map asset ingestion, full item stat-list interpretation,
-and save editing remain future work.
+generated-map/collision data structures. Legacy Classic/LoD export can now write
+a standalone fixed-section `.d2s` from live local-player state, including
+`0x94`-derived class skills, but item records are still empty. Native
+seed-to-layout map generation, pathfinding, DS1/DT1 map asset ingestion, full
+item stat-list interpretation, and semantic save editing remain future work.
 
 The crate now resolves dependencies and passes:
 
@@ -30,7 +32,7 @@ The crate now resolves dependencies and passes:
 cargo test
 ```
 
-The current suite has 107 unit tests.
+The current suite has 113 unit tests.
 
 ## Work Completed
 
@@ -149,6 +151,16 @@ The current suite has 107 unit tests.
 - Added `CharacterHeaderLayout`, `CharacterProgression`, `MercenaryHeader`,
   `CharacterStats`, `CharacterStat`, and `CharacterSkills`.
 - Added bit-packed `gf` character-stat parsing and 30-byte `if` skills parsing.
+- Added legacy Classic/LoD export from live `GameState` for local-player header
+  fields, bit-packed `gf` stats, and 30-byte `if` skills. The exporter can use
+  skills reconstructed from `0x94 PlayerSkillsInfo`, while still allowing an
+  explicit skill-table override for fixture/template workflows.
+- Replaced the minimal synthetic legacy export with a standalone LoD 1.10+
+  style writer. It emits a fixed pre-stats block with empty quest, waypoint,
+  and NPC-dialog sections, then generated stats/skills, empty player item and
+  corpse lists, and empty expansion merc/golem markers. Item record
+  serialization remains intentionally empty until live item-to-save conversion
+  is implemented.
 - Added read-only item-related section header parsing for `JM` item-list parent
   counts, `jf` corpse marker, `kf` Iron Golem flag, and `lf` follower block
   count/payload length.
@@ -270,6 +282,12 @@ The current suite has 107 unit tests.
 - Added regression tests for live TCP reassembly around split D2GS packets,
   out-of-order segments, duplicate retransmissions, compressed chunk splitting,
   and one-byte Huffman chunk headers.
+- Added `0x94 PlayerSkillsInfo` parsing from the 1.13c/1.14d/1.15 packet
+  table shape: count, player GUID, and count triples of global skill id plus
+  base level.
+- Added `PlayerSkillLevels` and wired `0x94` into `GameState`, preserving raw
+  global `Skills.txt` ids while projecting class-local skills into the 30-byte
+  legacy `.d2s` `if` table for export.
 
 ## Current Architecture Summary
 
@@ -310,7 +328,7 @@ MPQ bytes
   -> encrypted table bytes
   -> mpq_hash / mpq_decryption_key / decrypt_mpq_block
   -> MpqHashEntry / MpqBlockEntry
-  -> future read-only archive extraction
+  -> MpqArchive logical-path lookup and read-only extraction
 ```
 
 ## Challenges and Risks
@@ -326,15 +344,17 @@ MPQ bytes
   one-byte chunk headers and split chunks, but still needs captured live LoD
   fixtures before broad compressed-traffic support is claimed.
 - `CharacterFile` currently parses the stable header, D2R v105 progression and
-  mercenary header fields, character stats, and skills. Quests, waypoints,
-  NPC-introduction bytes, item records, detailed iron-golem payloads, detailed
-  follower payloads, and stash pages still need section parsers.
+  mercenary header fields, character stats, and skills. Legacy export can write
+  a standalone fixed-section LoD-style file with local-player stats and
+  reconstructed or caller-supplied skills, but semantic quest/waypoint/NPC
+  parsers, item records, detailed iron-golem payloads, detailed follower
+  payloads, and stash pages still need section parsers/writers.
 - `core::map` models generated map output and collision queries, but does not
   generate maps from seed natively. Blaine's package relies on the original
   game DLLs through a C/Wine helper for that hard part.
-- MPQ support currently stops at archive primitives. Full file extraction still
-  needs a reader abstraction, hash-table lookup, sector table handling,
-  compression dispatch, and fixtures against known MPQ files.
+- MPQ support can extract read-only files from MPQ v1 archives, but coverage is
+  still focused on Classic/LoD static data and small fixture archives. More
+  real-install fixtures and additional compression/archive variants are needed.
 - D2R item codes are Huffman-coded and use a different bit layout than legacy
   1.10+ saves; item parsing must dispatch through `SaveVersion` rather than a
   single shared bit layout.
@@ -352,6 +372,10 @@ MPQ bytes
   compatibility is claimed.
 - Live packet capture depends on host networking and privileges; tests should
   use byte fixtures instead.
+- Native level-graph capture for generator refinement is intentionally shelved
+  for now. If resumed, libd2 should own fixture formats and validators, while
+  any D2-runtime/DLL-based capture helper should remain a dev-only tool outside
+  the normal passive runtime path.
 - Native map generation and pathfinding are still missing.
 - Current README/repository naming still refers to `libd2r` and Diablo II:
   Resurrected in places, while `AGENTS.md` describes broader Classic, Lord of
@@ -389,18 +413,24 @@ MPQ bytes
    can resolve room tiles, borders, exits, and collision true to the game.
 11. Add pathfinding over `CollisionGrid` plus dynamic overlays from live
    `GameState` units and objects.
-12. Implement `.d2s` quest and waypoint section parsers next; these are
-   marker-delimited and lower risk than item rewriting.
-13. Add a version-dispatched item bitstream reader for legacy/LoD versus D2R
+12. Implement semantic `.d2s` quest, waypoint, and NPC-dialog section parsers;
+   the current standalone exporter writes empty constant sections, but does not
+   expose or edit their meanings yet.
+13. Capture live `0x94 PlayerSkillsInfo` fixtures from known LoD 1.14d
+   characters and compare exported `if` tables against known-good starting
+   saves.
+14. Add save-loader round-trip validation for the standalone synthetic export
+   against actual Classic/LoD clients before using it for offline play.
+15. Add a version-dispatched item bitstream reader for legacy/LoD versus D2R
    item encoding.
-14. Port D2R item-list navigation from Horadric Tools in read-only form before
+16. Port D2R item-list navigation from Horadric Tools in read-only form before
    attempting any item write support.
-15. Add scanner-style validation helpers for D2R save invariants: checksum,
+17. Add scanner-style validation helpers for D2R save invariants: checksum,
    size, stat terminator, item counts, follower count/payload length, and
    Warlock follower payload size.
-16. Start native map generation with a narrow area family after fixture coverage
+18. Start native map generation with a narrow area family after fixture coverage
    exists for external generated-map imports.
-17. Keep `ARCHITECTURE.md` and `REPORT.md` updated as each component becomes
+19. Keep `ARCHITECTURE.md` and `REPORT.md` updated as each component becomes
    real implementation.
 
 ## Resource Comparison
@@ -463,7 +493,7 @@ MPQ bytes
 cargo test
 ```
 
-Result: passed. 107 tests.
+Result: passed. 110 tests.
 
 ```text
 cargo fmt --check

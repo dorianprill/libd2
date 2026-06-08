@@ -4,7 +4,10 @@ use std::io;
 use std::path::Path;
 
 use crate::core::character_class::CharacterClass;
+use crate::core::entity::player::Player;
+use crate::core::game_state::GameState;
 use crate::core::inventory::InventoryProfile;
+use crate::core::unit_stat::UnitStat;
 use crate::core::version::{detect_edition, CharacterStatus, GameEdition, SaveVersion};
 
 const D2S_MAGIC: u32 = 0xaa55_aa55;
@@ -27,6 +30,26 @@ const D2R_V105_MERC_STATUS_OFFSET: usize = 0x0a7;
 const D2R_V105_MERC_ID_OFFSET: usize = 0x0a9;
 const D2R_V105_MERC_XP_OFFSET: usize = 0x0ab;
 const D2R_V105_HEADER_LEN: usize = 0x150;
+const LEGACY_FULL_EXPORT_PRE_STATS_LEN: usize = 0x2fd;
+const LEGACY_ASSIGNED_SKILLS_OFFSET: usize = 0x38;
+const LEGACY_LEFT_SKILL_OFFSET: usize = 0x78;
+const LEGACY_RIGHT_SKILL_OFFSET: usize = 0x7c;
+const LEGACY_LEFT_SWAP_SKILL_OFFSET: usize = 0x80;
+const LEGACY_RIGHT_SWAP_SKILL_OFFSET: usize = 0x84;
+const LEGACY_APPEARANCE_OFFSET: usize = 0x88;
+const LEGACY_DIFFICULTY_OFFSET: usize = 0xa8;
+const LEGACY_MAP_ID_OFFSET: usize = 0xab;
+const LEGACY_MERCENARY_OFFSET: usize = 0xb1;
+const LEGACY_REALM_DATA_OFFSET: usize = 0xbf;
+const LEGACY_QUEST_UNKNOWN_OFFSET: usize = 0x14b;
+const LEGACY_QUEST_HEADER_OFFSET: usize = 0x14f;
+const LEGACY_QUEST_MAGIC_OFFSET: usize = 0x153;
+const LEGACY_WAYPOINT_HEADER_OFFSET: usize = 0x279;
+const LEGACY_WAYPOINT_MAGIC_OFFSET: usize = 0x27b;
+const LEGACY_WAYPOINT_DIFFICULTIES_OFFSET: usize = 0x281;
+const LEGACY_WAYPOINT_DIFFICULTY_LEN: usize = 24;
+const LEGACY_WAYPOINT_TRAILER_OFFSET: usize = 0x2c9;
+const LEGACY_NPC_HEADER_OFFSET: usize = 0x2ca;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SaveSectionMarker {
@@ -258,6 +281,45 @@ pub struct CharacterFile {
     item_lists: CharacterItemLists,
 }
 
+/// Options for exporting a legacy Classic/LoD `.d2s` snapshot from live state.
+///
+/// By default libd2 derives the 30-byte save `if` skill table from skill ids
+/// captured in D2GS `0x94 PlayerSkillsInfo`. Tests and recovery tools can still
+/// supply an explicit table when they need to preserve fixture bytes or when a
+/// capture did not include the skill-list packet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CharacterExportOptions {
+    skills: Option<[u8; 30]>,
+}
+
+impl CharacterExportOptions {
+    pub fn new(skills: [u8; 30]) -> Self {
+        Self {
+            skills: Some(skills),
+        }
+    }
+
+    pub fn from_game_state_skills() -> Self {
+        Self::default()
+    }
+
+    pub fn empty_skills() -> Self {
+        Self {
+            skills: Some([0; 30]),
+        }
+    }
+
+    pub fn skills(&self) -> Option<&[u8; 30]> {
+        self.skills.as_ref()
+    }
+}
+
+impl Default for CharacterExportOptions {
+    fn default() -> Self {
+        Self { skills: None }
+    }
+}
+
 impl CharacterFile {
     pub fn parse(bytes: impl Into<Vec<u8>>) -> Result<Self, CharacterFileError> {
         let raw = bytes.into();
@@ -324,6 +386,64 @@ impl CharacterFile {
         fix_header(&mut raw);
         raw
     }
+
+    /// Builds a standalone legacy Classic/LoD `.d2s` file from the local player
+    /// in a reconstructed [`GameState`].
+    ///
+    /// The writer emits the fixed pre-stats save block used by LoD 1.10+ saves:
+    /// header, empty hotkeys/appearance/location/merc fields, empty quest,
+    /// waypoint, and NPC-dialog sections, then generated `gf` stats, generated
+    /// `if` class skills, empty player item and corpse lists, and expansion-only
+    /// empty merc/golem sections. Item records are intentionally left empty until
+    /// live item-to-save serialization is implemented.
+    pub fn export_legacy_from_game_state(
+        state: &GameState,
+        options: CharacterExportOptions,
+    ) -> Result<Self, CharacterExportError> {
+        let snapshot = LegacyExportSnapshot::from_game_state(state, options)?;
+        let stats_section = encode_character_stats_section(&snapshot.stats)?;
+        let skills_section = encode_character_skills_section(snapshot.skills);
+
+        let mut raw = build_legacy_fixed_pre_stats_block(&snapshot);
+        raw.extend_from_slice(&stats_section);
+        raw.extend_from_slice(&skills_section);
+        append_empty_legacy_item_sections(&mut raw, snapshot.status.expansion);
+        fix_header(&mut raw);
+
+        Self::parse(raw).map_err(CharacterExportError::CharacterFile)
+    }
+
+    /// Returns a copy of this legacy save with live state overlaid onto the
+    /// header, `gf` stat section, and 30-byte `if` skill section.
+    ///
+    /// The rest of the file is left byte-for-byte intact apart from shifting
+    /// later sections if the encoded stat bitstream changes length and repairing
+    /// the size/checksum header fields. This is the preferred path for exports
+    /// meant to start from a real Classic/LoD character file, because D2GS does
+    /// not expose every save-only section needed to synthesize a complete save
+    /// from scratch.
+    pub fn overlay_legacy_game_state(
+        &self,
+        state: &GameState,
+        options: CharacterExportOptions,
+    ) -> Result<Self, CharacterExportError> {
+        if self.header.layout != CharacterHeaderLayout::Legacy {
+            return Err(CharacterExportError::UnsupportedTemplateLayout {
+                layout: self.header.layout,
+            });
+        }
+
+        let snapshot = LegacyExportSnapshot::from_game_state(state, options)?;
+        let stats_section = encode_character_stats_section(&snapshot.stats)?;
+        let skills_section = encode_character_skills_section(snapshot.skills);
+
+        let mut raw = self.raw.clone();
+        write_legacy_header_snapshot(&mut raw, &snapshot);
+        replace_legacy_export_sections(&mut raw, &stats_section, &skills_section)?;
+        fix_header(&mut raw);
+
+        Self::parse(raw).map_err(CharacterExportError::CharacterFile)
+    }
 }
 
 #[derive(Debug)]
@@ -387,6 +507,71 @@ impl std::error::Error for CharacterFileError {}
 impl From<io::Error> for CharacterFileError {
     fn from(error: io::Error) -> Self {
         Self::Io(error)
+    }
+}
+
+#[derive(Debug)]
+pub enum CharacterExportError {
+    NoLocalPlayer,
+    LocalPlayerMissing {
+        id: u32,
+    },
+    InvalidCharacterName {
+        name: String,
+    },
+    StatValueTooLarge {
+        stat: CharacterStat,
+        value: u32,
+        max: u32,
+    },
+    UnsupportedTemplateLayout {
+        layout: CharacterHeaderLayout,
+    },
+    MissingSection {
+        marker: SaveSectionMarker,
+    },
+    CharacterFile(CharacterFileError),
+}
+
+impl fmt::Display for CharacterExportError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoLocalPlayer => write!(formatter, "game state has no local player id"),
+            Self::LocalPlayerMissing { id } => {
+                write!(
+                    formatter,
+                    "local player 0x{:08x} is not present in game state",
+                    id
+                )
+            }
+            Self::InvalidCharacterName { name } => {
+                write!(formatter, "invalid legacy D2S character name {:?}", name)
+            }
+            Self::StatValueTooLarge { stat, value, max } => write!(
+                formatter,
+                "character stat {:?} value {} exceeds legacy D2S maximum {}",
+                stat, value, max
+            ),
+            Self::UnsupportedTemplateLayout { layout } => {
+                write!(formatter, "unsupported D2S template layout {:?}", layout)
+            }
+            Self::MissingSection { marker } => {
+                write!(
+                    formatter,
+                    "D2S template is missing {}",
+                    marker.description()
+                )
+            }
+            Self::CharacterFile(error) => write!(formatter, "character file error: {}", error),
+        }
+    }
+}
+
+impl std::error::Error for CharacterExportError {}
+
+impl From<CharacterFileError> for CharacterExportError {
+    fn from(error: CharacterFileError) -> Self {
+        Self::CharacterFile(error)
     }
 }
 
@@ -584,6 +769,283 @@ fn parse_item_lists(raw: &[u8], layout: CharacterHeaderLayout) -> CharacterItemL
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LegacyExportSnapshot {
+    name: String,
+    status: CharacterStatus,
+    class: CharacterClass,
+    level: u8,
+    map_id: u32,
+    stats: Vec<(CharacterStat, u32)>,
+    skills: [u8; 30],
+}
+
+impl LegacyExportSnapshot {
+    fn from_game_state(
+        state: &GameState,
+        options: CharacterExportOptions,
+    ) -> Result<Self, CharacterExportError> {
+        let local_id = state
+            .local_player_id()
+            .ok_or(CharacterExportError::NoLocalPlayer)?;
+        let player = state
+            .player(local_id)
+            .ok_or(CharacterExportError::LocalPlayerMissing { id: local_id })?;
+        let name = player.name().to_owned();
+        validate_legacy_character_name(&name)?;
+
+        let class = player.class();
+        let skills = options
+            .skills
+            .unwrap_or_else(|| player.legacy_save_skills());
+        let level_value = player
+            .stat(UnitStat::Level as u16)
+            .unwrap_or_else(|| player.level())
+            .max(1);
+        let level =
+            u8::try_from(level_value).map_err(|_| CharacterExportError::StatValueTooLarge {
+                stat: CharacterStat::Level,
+                value: level_value,
+                max: u8::MAX as u32,
+            })?;
+
+        let mut stats = legacy_character_stats_from_player(player);
+        upsert_stat(&mut stats, CharacterStat::Level, level_value);
+        stats.sort_by_key(|(stat, _)| *stat as u16);
+        validate_character_stats(&stats)?;
+
+        let status = CharacterStatus {
+            hardcore: state.is_hardcore(),
+            died: false,
+            expansion: state.is_expansion()
+                || matches!(class, CharacterClass::Druid | CharacterClass::Assassin),
+            ladder: state.is_ladder(),
+        };
+
+        Ok(Self {
+            name,
+            status,
+            class,
+            level,
+            map_id: state.map().map_id.unwrap_or_default(),
+            stats,
+            skills,
+        })
+    }
+}
+
+fn legacy_character_stats_from_player(player: &Player) -> Vec<(CharacterStat, u32)> {
+    let mut stats = Vec::new();
+
+    for id in 0..=15 {
+        let Some(stat) = CharacterStat::from_id(id) else {
+            continue;
+        };
+        if let Some(value) = player.stat(id) {
+            stats.push((stat, value));
+        }
+    }
+
+    if let Some(vitals) = player.vitals() {
+        if let Some(life) = vitals.life() {
+            insert_stat_if_absent(&mut stats, CharacterStat::HitPoints, life as u32);
+        }
+        if let Some(mana) = vitals.mana() {
+            insert_stat_if_absent(&mut stats, CharacterStat::Mana, mana as u32);
+        }
+        if let Some(stamina) = vitals.stamina() {
+            insert_stat_if_absent(&mut stats, CharacterStat::Stamina, stamina as u32);
+        }
+    }
+
+    stats
+}
+
+fn validate_legacy_character_name(name: &str) -> Result<(), CharacterExportError> {
+    let bytes = name.as_bytes();
+    if bytes.is_empty() || bytes.len() > CHARACTER_NAME_LEN - 1 || bytes.contains(&0) {
+        return Err(CharacterExportError::InvalidCharacterName {
+            name: name.to_owned(),
+        });
+    }
+
+    Ok(())
+}
+
+fn validate_character_stats(stats: &[(CharacterStat, u32)]) -> Result<(), CharacterExportError> {
+    for (stat, value) in stats {
+        let width = stat.bit_width();
+        let max = if width == 32 {
+            u32::MAX
+        } else {
+            (1u32 << width) - 1
+        };
+        if *value > max {
+            return Err(CharacterExportError::StatValueTooLarge {
+                stat: *stat,
+                value: *value,
+                max,
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn upsert_stat(stats: &mut Vec<(CharacterStat, u32)>, stat: CharacterStat, value: u32) {
+    if let Some((_, existing)) = stats.iter_mut().find(|(candidate, _)| *candidate == stat) {
+        *existing = value;
+    } else {
+        stats.push((stat, value));
+    }
+}
+
+fn insert_stat_if_absent(stats: &mut Vec<(CharacterStat, u32)>, stat: CharacterStat, value: u32) {
+    if !stats.iter().any(|(candidate, _)| *candidate == stat) {
+        stats.push((stat, value));
+    }
+}
+
+fn encode_character_stats_section(
+    stats: &[(CharacterStat, u32)],
+) -> Result<Vec<u8>, CharacterExportError> {
+    validate_character_stats(stats)?;
+
+    let mut bits = Vec::new();
+    bits.extend_from_slice(SaveSectionMarker::Stats.raw_bytes());
+    let mut writer = SaveBitWriter::default();
+    for (stat, value) in stats {
+        writer.write_bits(*stat as u32, 9);
+        writer.write_bits(*value, stat.bit_width() as usize);
+    }
+    writer.write_bits(0x1ff, 9);
+    bits.extend_from_slice(&writer.finish());
+    Ok(bits)
+}
+
+fn encode_character_skills_section(skills: [u8; 30]) -> Vec<u8> {
+    let mut section = Vec::with_capacity(32);
+    section.extend_from_slice(SaveSectionMarker::Skills.raw_bytes());
+    section.extend_from_slice(&skills);
+    section
+}
+
+fn build_legacy_fixed_pre_stats_block(snapshot: &LegacyExportSnapshot) -> Vec<u8> {
+    let mut raw = vec![0; LEGACY_FULL_EXPORT_PRE_STATS_LEN];
+    raw[0..4].copy_from_slice(&D2S_MAGIC.to_le_bytes());
+    write_u32_le(&mut raw, VERSION_OFFSET, SaveVersion::Lod110Plus.raw());
+    write_legacy_header_snapshot(&mut raw, snapshot);
+
+    raw[0x29] = 0x10;
+    raw[0x2a] = 0x1e;
+    raw[0x34..0x38].fill(0xff);
+    write_u32_le(&mut raw, LEGACY_MAP_ID_OFFSET, snapshot.map_id);
+
+    write_empty_legacy_quests(&mut raw);
+    write_empty_legacy_waypoints(&mut raw);
+    write_empty_legacy_npc_dialogs(&mut raw);
+
+    debug_assert_eq!(LEGACY_ASSIGNED_SKILLS_OFFSET + 64, LEGACY_LEFT_SKILL_OFFSET);
+    debug_assert_eq!(LEGACY_LEFT_SKILL_OFFSET + 4, LEGACY_RIGHT_SKILL_OFFSET);
+    debug_assert_eq!(LEGACY_RIGHT_SKILL_OFFSET + 4, LEGACY_LEFT_SWAP_SKILL_OFFSET);
+    debug_assert_eq!(
+        LEGACY_LEFT_SWAP_SKILL_OFFSET + 4,
+        LEGACY_RIGHT_SWAP_SKILL_OFFSET
+    );
+    debug_assert_eq!(LEGACY_RIGHT_SWAP_SKILL_OFFSET + 4, LEGACY_APPEARANCE_OFFSET);
+    debug_assert_eq!(LEGACY_DIFFICULTY_OFFSET + 3, LEGACY_MAP_ID_OFFSET);
+    debug_assert_eq!(LEGACY_MERCENARY_OFFSET + 14, LEGACY_REALM_DATA_OFFSET);
+    debug_assert_eq!(raw.len(), LEGACY_FULL_EXPORT_PRE_STATS_LEN);
+    raw
+}
+
+fn write_empty_legacy_quests(raw: &mut [u8]) {
+    write_u32_le(raw, LEGACY_QUEST_UNKNOWN_OFFSET, 1);
+    raw[LEGACY_QUEST_HEADER_OFFSET..LEGACY_QUEST_HEADER_OFFSET + 4].copy_from_slice(b"Woo!");
+    raw[LEGACY_QUEST_MAGIC_OFFSET..LEGACY_QUEST_MAGIC_OFFSET + 6]
+        .copy_from_slice(&[6, 0, 0, 0, 0x2a, 0x01]);
+}
+
+fn write_empty_legacy_waypoints(raw: &mut [u8]) {
+    raw[LEGACY_WAYPOINT_HEADER_OFFSET..LEGACY_WAYPOINT_HEADER_OFFSET + 2].copy_from_slice(b"WS");
+    raw[LEGACY_WAYPOINT_MAGIC_OFFSET..LEGACY_WAYPOINT_MAGIC_OFFSET + 6]
+        .copy_from_slice(&[6, 0, 0, 0, 0x2a, 0x01]);
+    for difficulty in 0..3 {
+        let offset =
+            LEGACY_WAYPOINT_DIFFICULTIES_OFFSET + difficulty * LEGACY_WAYPOINT_DIFFICULTY_LEN;
+        raw[offset] = 0x02;
+        raw[offset + 1] = 0x01;
+    }
+
+    // Public parsers disagree by one byte at the waypoint/NPC boundary. Actual
+    // saves keep this `0x01` trailer immediately before the `w4` NPC marker;
+    // D2SLib treats it as the low byte of a `0x7701` NPC header.
+    raw[LEGACY_WAYPOINT_TRAILER_OFFSET] = 0x01;
+}
+
+fn write_empty_legacy_npc_dialogs(raw: &mut [u8]) {
+    raw[LEGACY_NPC_HEADER_OFFSET..LEGACY_NPC_HEADER_OFFSET + 2].copy_from_slice(b"w4");
+}
+
+fn append_empty_legacy_item_sections(raw: &mut Vec<u8>, is_expansion: bool) {
+    append_empty_item_list(raw);
+    append_empty_item_list(raw);
+
+    if is_expansion {
+        raw.extend_from_slice(SaveSectionMarker::Corpse.raw_bytes());
+        raw.extend_from_slice(SaveSectionMarker::IronGolem.raw_bytes());
+        raw.push(0);
+    }
+}
+
+fn append_empty_item_list(raw: &mut Vec<u8>) {
+    raw.extend_from_slice(SaveSectionMarker::ItemList.raw_bytes());
+    raw.extend_from_slice(&0u16.to_le_bytes());
+}
+
+fn replace_legacy_export_sections(
+    raw: &mut Vec<u8>,
+    stats_section: &[u8],
+    skills_section: &[u8],
+) -> Result<(), CharacterExportError> {
+    let stats_start = find_section_marker(raw, SaveSectionMarker::Stats, 0).ok_or(
+        CharacterExportError::MissingSection {
+            marker: SaveSectionMarker::Stats,
+        },
+    )?;
+    let skills_start = find_section_marker(raw, SaveSectionMarker::Skills, stats_start + 2).ok_or(
+        CharacterExportError::MissingSection {
+            marker: SaveSectionMarker::Skills,
+        },
+    )?;
+    if raw.len() < skills_start + skills_section.len() {
+        return Err(CharacterExportError::MissingSection {
+            marker: SaveSectionMarker::Skills,
+        });
+    }
+
+    raw.splice(stats_start..skills_start, stats_section.iter().copied());
+    let new_skills_start = stats_start + stats_section.len();
+    raw.splice(
+        new_skills_start..new_skills_start + skills_section.len(),
+        skills_section.iter().copied(),
+    );
+    Ok(())
+}
+
+fn write_legacy_header_snapshot(raw: &mut [u8], snapshot: &LegacyExportSnapshot) {
+    write_fixed_character_name(raw, LEGACY_NAME_OFFSET, &snapshot.name);
+    raw[LEGACY_STATUS_OFFSET] = snapshot.status.to_byte();
+    raw[LEGACY_CLASS_OFFSET] = snapshot.class as u8;
+    raw[LEGACY_LEVEL_OFFSET] = snapshot.level;
+}
+
+fn write_fixed_character_name(raw: &mut [u8], offset: usize, name: &str) {
+    let bytes = name.as_bytes();
+    raw[offset..offset + CHARACTER_NAME_LEN].fill(0);
+    raw[offset..offset + bytes.len()].copy_from_slice(bytes);
+}
+
 fn find_item_list_headers(raw: &[u8], start: usize) -> Vec<ItemListHeader> {
     let mut headers = Vec::new();
     let mut offset = start;
@@ -669,6 +1131,29 @@ fn read_bits(raw: &[u8], bit_offset: usize, count: usize) -> Option<u32> {
     Some(value)
 }
 
+#[derive(Default)]
+struct SaveBitWriter {
+    bytes: Vec<u8>,
+    bit_offset: usize,
+}
+
+impl SaveBitWriter {
+    fn write_bits(&mut self, value: u32, count: usize) {
+        for index in 0..count {
+            if self.bit_offset / 8 == self.bytes.len() {
+                self.bytes.push(0);
+            }
+            let bit = ((value >> index) & 1) as u8;
+            self.bytes[self.bit_offset / 8] |= bit << (self.bit_offset % 8);
+            self.bit_offset += 1;
+        }
+    }
+
+    fn finish(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
 fn header_layout(version: SaveVersion) -> CharacterHeaderLayout {
     if version.uses_v105_header() {
         CharacterHeaderLayout::ResurrectedV105
@@ -734,18 +1219,24 @@ fn fixed_c_string(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::core::game_state::GameState;
     use crate::core::inventory::GridSize;
+    use crate::core::unit_stat::UnitStat;
+    use crate::core::update::Update;
     use crate::core::version::{CharacterStatus, GameEdition, SaveVersion};
-    use crate::CharacterClass;
+    use crate::{CharacterClass, ServerMessage, SkillDescription};
 
     use super::{
-        calculate_checksum, CharacterFile, CharacterFileError, CharacterHeaderLayout,
-        CharacterProgression, CharacterStat, SaveSectionMarker, CHECKSUM_OFFSET,
-        D2R_LEGACY_NAME_OFFSET, D2R_V105_CLASS_OFFSET, D2R_V105_HEADER_LEN, D2R_V105_LEVEL_OFFSET,
-        D2R_V105_MERC_ID_OFFSET, D2R_V105_MERC_NAME_SEED_OFFSET, D2R_V105_MERC_STATUS_OFFSET,
-        D2R_V105_MERC_XP_OFFSET, D2R_V105_NAME_OFFSET, D2R_V105_PROGRESSION_OFFSET,
-        D2R_V105_STATUS_OFFSET, D2S_MAGIC, FILE_SIZE_OFFSET, LEGACY_CLASS_OFFSET,
-        LEGACY_LEVEL_OFFSET, LEGACY_NAME_OFFSET, LEGACY_STATUS_OFFSET, VERSION_OFFSET,
+        calculate_checksum, CharacterExportError, CharacterExportOptions, CharacterFile,
+        CharacterFileError, CharacterHeaderLayout, CharacterProgression, CharacterStat,
+        SaveSectionMarker, CHECKSUM_OFFSET, D2R_LEGACY_NAME_OFFSET, D2R_V105_CLASS_OFFSET,
+        D2R_V105_HEADER_LEN, D2R_V105_LEVEL_OFFSET, D2R_V105_MERC_ID_OFFSET,
+        D2R_V105_MERC_NAME_SEED_OFFSET, D2R_V105_MERC_STATUS_OFFSET, D2R_V105_MERC_XP_OFFSET,
+        D2R_V105_NAME_OFFSET, D2R_V105_PROGRESSION_OFFSET, D2R_V105_STATUS_OFFSET, D2S_MAGIC,
+        FILE_SIZE_OFFSET, LEGACY_CLASS_OFFSET, LEGACY_FULL_EXPORT_PRE_STATS_LEN,
+        LEGACY_LEVEL_OFFSET, LEGACY_NAME_OFFSET, LEGACY_NPC_HEADER_OFFSET,
+        LEGACY_QUEST_HEADER_OFFSET, LEGACY_STATUS_OFFSET, LEGACY_WAYPOINT_HEADER_OFFSET,
+        LEGACY_WAYPOINT_TRAILER_OFFSET, VERSION_OFFSET,
     };
 
     #[test]
@@ -968,6 +1459,115 @@ mod tests {
         assert_eq!(checksum, calculate_checksum(&written));
     }
 
+    #[test]
+    fn exports_full_legacy_d2s_from_game_state_stats_and_skills() {
+        let state = build_export_state();
+
+        let file = CharacterFile::export_legacy_from_game_state(
+            &state,
+            CharacterExportOptions::from_game_state_skills(),
+        )
+        .expect("state should export");
+        let header = file.header();
+
+        assert_eq!(header.layout, CharacterHeaderLayout::Legacy);
+        assert_eq!(header.save_version, SaveVersion::Lod110Plus);
+        assert_eq!(header.edition, GameEdition::LordOfDestruction);
+        assert_eq!(header.name, "Exported");
+        assert_eq!(header.class, Some(CharacterClass::Sorceress));
+        assert_eq!(header.level, 42);
+        assert!(header.status.expansion);
+        assert!(header.status.hardcore);
+        assert!(header.status.ladder);
+        assert_eq!(file.stat(CharacterStat::Strength), Some(50));
+        assert_eq!(file.stat(CharacterStat::Energy), Some(35));
+        assert_eq!(file.stat(CharacterStat::Level), Some(42));
+        assert_eq!(file.stat(CharacterStat::Experience), Some(123_456));
+        assert_eq!(file.stat(CharacterStat::HitPoints), Some(777));
+        assert_eq!(file.stat(CharacterStat::MaxHitPoints), Some(2048));
+        let parsed_skills = file.skills().expect("skills should be exported");
+        assert_eq!(parsed_skills.level_at_slot(0), Some(1));
+        assert_eq!(parsed_skills.level_at_slot(12), Some(20));
+        assert_eq!(
+            super::find_section_marker(file.raw_bytes(), SaveSectionMarker::Stats, 0),
+            Some(LEGACY_FULL_EXPORT_PRE_STATS_LEN)
+        );
+        assert_eq!(
+            &file.raw_bytes()[LEGACY_QUEST_HEADER_OFFSET..LEGACY_QUEST_HEADER_OFFSET + 4],
+            b"Woo!"
+        );
+        assert_eq!(
+            &file.raw_bytes()[LEGACY_WAYPOINT_HEADER_OFFSET..LEGACY_WAYPOINT_HEADER_OFFSET + 2],
+            b"WS"
+        );
+        assert_eq!(file.raw_bytes()[LEGACY_WAYPOINT_TRAILER_OFFSET], 0x01);
+        assert_eq!(
+            &file.raw_bytes()[LEGACY_NPC_HEADER_OFFSET..LEGACY_NPC_HEADER_OFFSET + 2],
+            b"w4"
+        );
+        assert_eq!(file.item_lists().item_lists.len(), 2);
+        assert_eq!(file.item_lists().item_lists[0].parent_item_count, 0);
+        assert_eq!(file.item_lists().item_lists[1].parent_item_count, 0);
+        assert!(!file.item_lists().iron_golem.unwrap().active);
+
+        let reparsed =
+            CharacterFile::parse(file.to_bytes()).expect("exported D2S should parse again");
+        assert_eq!(
+            reparsed.header().checksum,
+            calculate_checksum(reparsed.raw_bytes())
+        );
+    }
+
+    #[test]
+    fn overlays_legacy_template_with_state_stats_and_skills() {
+        let mut raw = build_save(0x60, "Template", 96);
+        raw[LEGACY_STATUS_OFFSET] = CharacterStatus {
+            expansion: true,
+            ..CharacterStatus::default()
+        }
+        .to_byte();
+        raw[LEGACY_CLASS_OFFSET] = CharacterClass::Amazon as u8;
+        raw[LEGACY_LEVEL_OFFSET] = 1;
+        raw.extend_from_slice(&encode_character_stats(&[
+            (CharacterStat::Strength, 10),
+            (CharacterStat::Level, 1),
+        ]));
+        raw.extend_from_slice(b"if");
+        raw.extend_from_slice(&[3; 30]);
+        raw.extend_from_slice(b"JM");
+        raw.extend_from_slice(&7u16.to_le_bytes());
+        raw.extend_from_slice(b"preserved-trailer");
+        fix_test_header(&mut raw);
+        let template = CharacterFile::parse(raw).expect("template should parse");
+
+        let state = build_export_state();
+        let mut skills = [0; 30];
+        skills[7] = 9;
+        let exported = template
+            .overlay_legacy_game_state(&state, CharacterExportOptions::new(skills))
+            .expect("template overlay should export");
+
+        assert_eq!(exported.header().name, "Exported");
+        assert_eq!(exported.header().class, Some(CharacterClass::Sorceress));
+        assert_eq!(exported.stat(CharacterStat::Strength), Some(50));
+        assert_eq!(exported.stat(CharacterStat::Level), Some(42));
+        assert_eq!(exported.skills().unwrap().level_at_slot(7), Some(9));
+        assert_eq!(exported.item_lists().item_lists.len(), 1);
+        assert_eq!(exported.item_lists().item_lists[0].parent_item_count, 7);
+        assert!(exported.raw_bytes().ends_with(b"preserved-trailer"));
+    }
+
+    #[test]
+    fn export_requires_local_player() {
+        let error = CharacterFile::export_legacy_from_game_state(
+            &GameState::default(),
+            CharacterExportOptions::default(),
+        )
+        .expect_err("empty state cannot export");
+
+        assert!(matches!(error, CharacterExportError::NoLocalPlayer));
+    }
+
     fn build_save(version: u32, name: &str, len: usize) -> Vec<u8> {
         let mut raw = vec![0; len];
         raw[0..4].copy_from_slice(&D2S_MAGIC.to_le_bytes());
@@ -1003,6 +1603,100 @@ mod tests {
         raw[CHECKSUM_OFFSET..CHECKSUM_OFFSET + 4].fill(0);
         let checksum = calculate_checksum(raw);
         raw[CHECKSUM_OFFSET..CHECKSUM_OFFSET + 4].copy_from_slice(&checksum.to_le_bytes());
+    }
+
+    fn build_export_state() -> GameState {
+        let mut state = GameState::default();
+        assert!(state.update(ServerMessage::GameFlags {
+            difficulty: 2,
+            arena_flags: 0x0000_0800,
+            is_expansion: 1,
+            is_ladder: 1,
+        }));
+        assert!(state.update(ServerMessage::LoadAct {
+            act: 0,
+            map_id: 0x1234_5678,
+            area_id: 1,
+            automap: 0,
+        }));
+        assert!(state.update(ServerMessage::AssignPlayer {
+            unit_id: 0x1000,
+            class: CharacterClass::Sorceress as u8,
+            szname: name16("Exported"),
+            x: 5100,
+            y: 5200,
+        }));
+        assert!(state.update(ServerMessage::PlayerSkillsInfo {
+            skills_count: 2,
+            player_id: 0x1000,
+            skills: vec![
+                SkillDescription {
+                    skill: 36,
+                    level: 1,
+                },
+                SkillDescription {
+                    skill: 48,
+                    level: 20,
+                },
+            ],
+        }));
+        assert!(state.update(ServerMessage::GameHandshake {
+            unit_type: 0,
+            unit_id: 0x1000,
+        }));
+        assert!(state.update(ServerMessage::SetAttributeU16 {
+            attribute: UnitStat::Strength as u8,
+            amount: 50,
+        }));
+        assert!(state.update(ServerMessage::SetAttributeU16 {
+            attribute: UnitStat::Energy as u8,
+            amount: 35,
+        }));
+        assert!(state.update(ServerMessage::SetAttributeU16 {
+            attribute: UnitStat::LifeMax as u8,
+            amount: 2048,
+        }));
+        assert!(state.update(ServerMessage::SetAttributeU16 {
+            attribute: UnitStat::Level as u8,
+            amount: 42,
+        }));
+        assert!(state.update(ServerMessage::SetAttributeU32 {
+            attribute: UnitStat::Experience as u8,
+            amount: 123_456,
+        }));
+        assert!(state.update(ServerMessage::LifeManaUpdate {
+            bitfield: status_bitfield::<12>(&[
+                (777, 15),
+                (333, 15),
+                (555, 15),
+                (5101, 16),
+                (5201, 16),
+                (0, 8),
+                (0, 8),
+            ]),
+        }));
+        state
+    }
+
+    fn name16(name: &str) -> [u8; 16] {
+        let mut bytes = [0; 16];
+        let name = name.as_bytes();
+        let len = name.len().min(bytes.len());
+        bytes[..len].copy_from_slice(&name[..len]);
+        bytes
+    }
+
+    fn status_bitfield<const N: usize>(values: &[(u32, usize)]) -> [u8; N] {
+        let mut bytes = [0; N];
+        let mut bit_offset = 0;
+        for (value, count) in values {
+            for index in 0..*count {
+                let bit = ((value >> index) & 1) as u8;
+                bytes[bit_offset / 8] |= bit << (bit_offset % 8);
+                bit_offset += 1;
+            }
+        }
+        bytes
     }
 
     fn encode_character_stats(stats: &[(CharacterStat, u32)]) -> Vec<u8> {
