@@ -36,13 +36,13 @@ This list describes the current code, not the final project goal.
    - [x] D2R/modern Battle.net traffic on port `1119` is classified as encrypted/unknown transport and is no longer fed into the legacy D2GS parser.
    - [x] Plain D2GS TCP payloads are split into individual `D2GSPacket`s before parsing, including live-observed concatenated map-reveal and `0x9C` item bursts.
    - [x] Compressed D2GS/Huffman framing tracks `0xAF` compression mode, supports one-byte and two-byte chunk headers, buffers compressed chunks split across TCP payloads, and is covered by Blacha-derived Huffman fixtures. More captured live compressed fixtures are still needed before claiming broad compressed-traffic compatibility.
-   - [x] Parsed server packet IDs: `0x00..0x11`, `0x15`, `0x18`, `0x19..0x20`, `0x23`, `0x28`, `0x3E`, `0x47`, `0x48`, `0x4C`, `0x4D`, `0x51`, `0x53`, `0x59`, `0x5A`, `0x5B`, `0x5C`, `0x67..0x69`, `0x6B..0x6D`, `0x75`, `0x76`, `0x77`, `0x7D`, `0x8F`, `0x90`, `0x95`, `0x96`, `0x9C`, `0x9D`, `0xA9`, `0xAB`, `0xAC`, `0xAF`, and `0xB0`.
+   - [x] Parsed server packet IDs: `0x00..0x11`, `0x15`, `0x18`, `0x19..0x20`, `0x23`, `0x28`, `0x3E`, `0x47`, `0x48`, `0x4C`, `0x4D`, `0x51`, `0x53`, `0x59`, `0x5A`, `0x5B`, `0x5C`, `0x67..0x69`, `0x6B..0x6D`, `0x75`, `0x76`, `0x77`, `0x7D`, `0x8F`, `0x90`, `0x94`, `0x95`, `0x96`, `0x9C`, `0x9D`, `0xA9`, `0xAB`, `0xAC`, `0xAF`, and `0xB0`.
    - [x] Local-player HP/mana/stamina bitstreams from `0x18`, `0x95`, and `0x96` are decoded into raw packet-unit vitals, regeneration counters where present, and movement verification coordinates.
    - [ ] Missing high-priority packet parsers include party/relationship packets beyond the parsed `0x75` level update (`0x7F`, `0x8B..0x8D`), mercenary/summon updates (`0x4E`, `0x81`, `0x9E..0xA2`), chat/event streams, quest streams, and full item stat-list interpretation.
    - [ ] BNCS and MCP/Realm protocol support are not implemented; `realm_connection` currently contains declarative status/message sketches only.
 2. Runtime game-state reconstruction
    - [x] Tracks game type, difficulty, locale, expansion/ladder/hardcore flags, local player id, and active act/map metadata.
-   - [x] Tracks players for assignment, join/leave, movement, player-map updates, `0x75` party-info level updates, simple local stats, experience updates, and local-player HP/mana/stamina/movement verification.
+   - [x] Tracks players for assignment, join/leave, movement, player-map updates, `0x75` party-info level updates, `0x94` base skill levels by global `Skills.txt` id, simple local stats, experience updates, and local-player HP/mana/stamina/movement verification.
    - [x] Tracks NPCs/monsters for assignment, movement/action/attack/stop, state, life percent, heal, and death/removal.
    - [x] Tracks world objects for assignment/removal, level-warp entrance markers from `0x09`, and object-state metadata from `0x0E` for known objects.
    - [x] Tracks map reveal/hide tiles from packets.
@@ -57,7 +57,9 @@ This list describes the current code, not the final project goal.
    - [x] Edition detection covers Classic, Lord of Destruction, Resurrected, and Reign of the Warlock. Classic/LoD are distinguished by the expansion status flag; RotW is detected for D2R-encoded saves with Warlock class id `7`.
    - [x] Inventory profiles are modeled for Classic (`10x4` inventory, `6x4` stash), LoD (`10x4`, `6x8` stash), D2R (`10x4`, `10x10` personal stash, 3 shared pages), and RotW (`10x4`, `10x8` personal stash, 3 shared pages).
    - [x] Parsed save sections include header fields, D2R v105 progression and mercenary header fields, bit-packed `gf` character stats, 30-byte `if` skills, and item-related marker metadata for `JM`, `jf`, `kf`, and `lf`.
-   - [ ] Item records, personal/shared stash pages, quests, waypoints, NPC introductions, corpse payloads, detailed Iron Golem payloads, follower payload contents, and semantic save editing are not implemented.
+   - [x] Legacy Classic/LoD export can write a standalone LoD 1.10+ style `.d2s` from local-player `GameState`: header/status/class/level/map seed, bit-packed `gf` stats, reconstructed `0x94` skills projected into the 30-byte `if` class table, empty player item and corpse lists, and empty expansion merc/golem markers. Callers can override the skill table when a capture lacks `0x94`.
+   - [x] Legacy template overlay can rewrite header, stats, and skills in an existing Classic/LoD save while preserving later save-only sections and repairing size/checksum.
+   - [ ] Item records, personal/shared stash pages, semantic quest/waypoint/NPC introduction parsers, corpse payloads, detailed Iron Golem payloads, follower payload contents, and semantic save editing are not implemented.
 4. MPQ and static game data
    - [x] MPQ primitives include header parsing, hash-table/block-table entry parsing, format/compression enums, path hashing, decryption-key derivation, encryption-table generation, and in-place block decryption.
    - [x] Read-only MPQ v1 archive lookup/extraction supports known logical paths, encrypted hash/block tables, sector tables, encrypted sectors, single-unit files, uncompressed sectors, PKWARE implode, zlib, and bzip2 compression masks.
@@ -169,11 +171,12 @@ protocol and save-editing areas are intentionally incomplete.
 Here are some great resources on the original game, thanks to everyone who has been working on reverse engineering and botting for this game over the years, without you this would not be possible:
 
 - [client-less C# bot by dkuwahara](https://github.com/dkuwahara/OmegaBot)
-- a [blog post by Eric Carmichael](http://www.ericcarmichael.com/my-diablo-2-botting-phase.html)  
-- and, of course, [D2BS](https://github.com/noah-/d2bs)
+- [a blog post by Eric Carmichael](http://www.ericcarmichael.com/my-diablo-2-botting-phase.html)  
+- [D2BS](https://github.com/noah-/d2bs)
 - Another good resource is the [diablo 2 protocol js library](https://github.com/MephisTools/diablo2-protocol).
-- - https://github.com/blizzhackers/kolbot (Data structures and game mechanics)
+- https://github.com/blizzhackers/kolbot (Data structures and game mechanics)
 - https://github.com/blizzhackers/kolbot-SoloPlay (Solo play strategy  implementation)
+- [Blizzhackers/Diablo2PacketsData](https://github.com/blizzhackers/Diablo2PacketsData)
 - https://github.com/blacha/diablo2  (Network traffic interception and parsing and visualization of game state)
 - https://github.com/OpenDiablo2/OpenDiablo2 (Reverse engineering of game mechanics and data structures, as well as implementation of a custom game client, ARCHIVED)
 - https://github.com/eezstreet/OpenD2 (Reverse engineering of game mechanics and data structures, as well as implementation of a custom game client, ARCHIVED?)

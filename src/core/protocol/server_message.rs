@@ -811,18 +811,17 @@ pub enum ServerMessage {
         skill_page: u8,
     } = 0x93,
 
-    /// TODO verify structure
-    /// Skills is an array containing 'amount' items (skills)
-    /// each item is comprised of an u16 skill field and a u8 level field
+    /// Base skill levels for a player (`D2GS_SKILLSLIST`).
+    ///
+    /// Legacy packet tables for 1.13c, 1.14d, and D2R 1.15 all describe this
+    /// as a variable-length list keyed by global `Skills.txt` ids: one count
+    /// byte, a player GUID, then `count` triples of little-endian skill id and
+    /// base level. These are the skill points stored in the save-file `if`
+    /// class-skill table, before item/aura modifiers are applied.
     PlayerSkillsInfo {
         skills_count: u8,
         player_id: u32,
-        skills: [SkillDescription; 16], // FIXME what is max size?
-                                        // actual skill description
-                                        //"sSkills[skills_count]" : [
-                                        //    { "short" : "nSkillId" },
-                                        //    { "BYTE" : "nLevel" }
-                                        //]
+        skills: Vec<SkillDescription>,
     } = 0x94,
 
     /// Local-player life/mana/stamina and movement verification.
@@ -1078,8 +1077,8 @@ pub enum ServerMessage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[repr(C)]
 pub struct SkillDescription {
-    skill: u16,
-    level: u8,
+    pub skill: u16,
+    pub level: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1563,6 +1562,31 @@ impl ServerMessage {
                     player_y: cursor.u32_le(),
                 })
             }
+            0x94 => {
+                let mut cursor = PacketCursor::new_variable(input, 6, 1)?;
+                let skills_count = cursor.u8();
+                let expected = skills_count as usize * 3 + 6;
+                if input.len() != expected {
+                    return Err(ServerMessageParseError::UnexpectedLength {
+                        packet_id,
+                        expected,
+                        actual: input.len(),
+                    });
+                }
+                let player_id = cursor.u32_le();
+                let mut skills = Vec::with_capacity(skills_count as usize);
+                for _ in 0..skills_count {
+                    skills.push(SkillDescription {
+                        skill: cursor.u16_le(),
+                        level: cursor.u8(),
+                    });
+                }
+                Ok(Self::PlayerSkillsInfo {
+                    skills_count,
+                    player_id,
+                    skills,
+                })
+            }
             0x95 => {
                 let mut cursor = PacketCursor::new(input, 13)?;
                 Ok(Self::LifeManaUpdate {
@@ -1772,7 +1796,7 @@ impl<'a> PacketCursor<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ServerMessage, ServerMessageParseError};
+    use super::{ServerMessage, ServerMessageParseError, SkillDescription};
     use crate::core::network::d2gs::D2GSReader;
 
     #[test]
@@ -1884,6 +1908,47 @@ mod tests {
             ServerMessage::UpdateItemStats {
                 packet_size: 0x05,
                 bitstream: vec![0x10, 0x20, 0x30],
+            }
+        );
+    }
+
+    #[test]
+    fn parse_player_skills_info_reads_variable_skill_list() {
+        let message = ServerMessage::parse(&[
+            0x94, 0x02, 0x44, 0x33, 0x22, 0x11, 0x24, 0x00, 0x05, 0x40, 0x00, 0x01,
+        ])
+        .expect("skill list should parse");
+
+        assert_eq!(
+            message,
+            ServerMessage::PlayerSkillsInfo {
+                skills_count: 2,
+                player_id: 0x1122_3344,
+                skills: vec![
+                    SkillDescription {
+                        skill: 36,
+                        level: 5,
+                    },
+                    SkillDescription {
+                        skill: 64,
+                        level: 1,
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn parse_player_skills_info_rejects_size_mismatch() {
+        let error = ServerMessage::parse(&[0x94, 0x02, 0x44, 0x33, 0x22, 0x11, 0x24, 0x00, 0x05])
+            .expect_err("truncated skill list should fail");
+
+        assert_eq!(
+            error,
+            ServerMessageParseError::UnexpectedLength {
+                packet_id: 0x94,
+                expected: 12,
+                actual: 9,
             }
         );
     }

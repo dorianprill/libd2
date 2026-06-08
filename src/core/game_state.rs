@@ -7,7 +7,7 @@ use crate::core::entity::player::{Player, PlayerMovement, PlayerVitals};
 use crate::core::network::d2gs::D2GSPacket;
 use crate::core::object::item::{Item, ItemStateFlags};
 use crate::core::object::WorldObject;
-use crate::core::protocol::server_message::ServerMessageParseError;
+use crate::core::protocol::server_message::{ServerMessageParseError, SkillDescription};
 use crate::core::unit_stat::UnitStat;
 use crate::core::update::Update;
 use crate::ServerMessage;
@@ -269,6 +269,17 @@ impl GameState {
             return false;
         };
         player.set_stat(stat, amount);
+        true
+    }
+
+    fn set_player_skills(&mut self, unit_id: u32, skills: Vec<SkillDescription>) -> bool {
+        let unit_id = self.resolve_player_id(unit_id);
+        let Some(player) = self.players.get_mut(&unit_id) else {
+            return false;
+        };
+        for skill in skills {
+            player.set_skill_level(skill.skill, skill.level);
+        }
         true
     }
 
@@ -686,6 +697,9 @@ impl Update for GameState {
                 }
                 self.move_player(player_id, Coordinate::new(player_x as u16, player_y as u16))
             }
+            ServerMessage::PlayerSkillsInfo {
+                player_id, skills, ..
+            } => self.set_player_skills(player_id, skills),
             ServerMessage::RemoveObject { unit_type, unit_id } => {
                 self.remove_unit(unit_type, unit_id)
             }
@@ -979,7 +993,7 @@ mod tests {
     use crate::core::update::Update;
     use crate::{
         CharacterClass, Difficulty, GameState, ItemDestination, ItemOwner, ItemPlacement,
-        ServerMessage,
+        ServerMessage, SkillDescription,
     };
 
     #[test]
@@ -1092,6 +1106,46 @@ mod tests {
 
         let player = state.player(7).expect("player exists");
         assert_eq!(player.level(), 88);
+    }
+
+    #[test]
+    fn player_skills_info_updates_raw_skills_and_legacy_save_table() {
+        let mut state = GameState::default();
+        state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: CharacterClass::Sorceress as u8,
+            szname: *b"Sorc\0\0\0\0\0\0\0\0\0\0\0\0",
+            x: 10,
+            y: 11,
+        });
+
+        assert!(state.update(ServerMessage::PlayerSkillsInfo {
+            skills_count: 3,
+            player_id: 7,
+            skills: vec![
+                SkillDescription {
+                    skill: 36,
+                    level: 5,
+                },
+                SkillDescription {
+                    skill: 40,
+                    level: 2,
+                },
+                SkillDescription {
+                    skill: 7,
+                    level: 9,
+                },
+            ],
+        }));
+
+        let player = state.player(7).expect("player exists");
+        assert_eq!(player.skills().get(36), Some(5));
+        assert_eq!(player.skills().get(40), Some(2));
+        assert_eq!(player.skills().get(7), Some(9));
+        let save_table = player.legacy_save_skills();
+        assert_eq!(save_table[0], 5);
+        assert_eq!(save_table[4], 2);
+        assert_eq!(save_table.iter().filter(|&&level| level != 0).count(), 2);
     }
 
     #[test]
