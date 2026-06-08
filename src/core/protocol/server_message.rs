@@ -142,15 +142,7 @@ pub enum ServerMessage {
         unused_1: u8,
         unused_2: u8,
         count: u8,
-        // then follows an array of units
-        // { "sUnitInfo[count]" : [
-        //			{ "BYTE" : "nUnitType" },
-        //			{ "int" : "nUnitGUID" },
-        //			{ "short" : "nUnitX" },
-        //			{ "short" : "nUnitY" }
-        //		]
-        //	}
-        // TODO how to represent?
+        units: Vec<UnitPositionUpdate>,
     } = 0x16,
 
     Unused1 = 0x17,
@@ -630,9 +622,12 @@ pub enum ServerMessage {
     Unknown23 = 0x72,
 
     /// Update for missile objects
-    /// current_frame might be wrong acc. to bh
+    ///
+    /// Public packet tables call the first `u32` field `Unused`, but it behaves
+    /// like a stable missile GUID in practice and is used that way in `GameState`
+    /// until contradictory live evidence appears.
     MissileData {
-        unused: u32,
+        missile_id: u32,
         missile_class: u16,
         missile_x: u32,
         missile_y: u32,
@@ -982,7 +977,7 @@ pub enum ServerMessage {
         unit_id: u32,
         packet_size: u8,
         state: u8,
-        state_effects: [u8; 248], // { "BYTE" : "BitStream[nFullPacketSize - 8]" } FIXME maximum packet size
+        state_effects: Vec<u8>,
     } = 0xA8,
 
     EndState {
@@ -991,11 +986,11 @@ pub enum ServerMessage {
         state: u8,
     } = 0xA9,
 
-    StateAdd {
+    MultiStates {
         unit_type: u8,
         unit_id: u32,
         packet_size: u8,
-        bitstream: [u8; 249], // { "BYTE" : "BitStream[nFullPacketSize - 7]" } FIXME maximum packet size
+        state_effects: Vec<u8>,
     } = 0xAA,
 
     NpcHeal {
@@ -1074,7 +1069,16 @@ pub enum ServerMessage {
 ////////////////////////////////////////////////
 
 // Additional Containers and Bitfields
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct UnitPositionUpdate {
+    pub unit_type: u8,
+    pub unit_id: u32,
+    pub x: u16,
+    pub y: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct SkillDescription {
     pub skill: u16,
@@ -1232,6 +1236,35 @@ impl ServerMessage {
                     x: cursor.u16_le(),
                     y: cursor.u16_le(),
                     value: cursor.u8(),
+                })
+            }
+            0x16 => {
+                let mut cursor = PacketCursor::new_variable(input, 4, 3)?;
+                let unused_1 = cursor.u8();
+                let unused_2 = cursor.u8();
+                let count = cursor.u8();
+                let expected = 4 + count as usize * 9;
+                if input.len() != expected {
+                    return Err(ServerMessageParseError::UnexpectedLength {
+                        packet_id,
+                        expected,
+                        actual: input.len(),
+                    });
+                }
+                let mut units = Vec::with_capacity(count as usize);
+                for _ in 0..count {
+                    units.push(UnitPositionUpdate {
+                        unit_type: cursor.u8(),
+                        unit_id: cursor.u32_le(),
+                        x: cursor.u16_le(),
+                        y: cursor.u16_le(),
+                    });
+                }
+                Ok(Self::MultipleUnitsCoordsUpdate {
+                    unused_1,
+                    unused_2,
+                    count,
+                    units,
                 })
             }
             0x18 => {
@@ -1508,6 +1541,30 @@ impl ServerMessage {
                     unit_life: cursor.u8(),
                 })
             }
+            0x73 => {
+                let mut cursor = PacketCursor::new(input, 32)?;
+                Ok(Self::MissileData {
+                    missile_id: cursor.u32_le(),
+                    missile_class: cursor.u16_le(),
+                    missile_x: cursor.u32_le(),
+                    missile_y: cursor.u32_le(),
+                    target_x: cursor.u32_le(),
+                    target_y: cursor.u32_le(),
+                    current_frame: cursor.u16_le(),
+                    owner_type: cursor.u8(),
+                    owner_id: cursor.u32_le(),
+                    skill_level: cursor.u8(),
+                    pierce_level: cursor.u8(),
+                })
+            }
+            0x74 => {
+                let mut cursor = PacketCursor::new(input, 10)?;
+                Ok(Self::PlayerCorpseAssign {
+                    assign: cursor.u8(),
+                    owner_id: cursor.u32_le(),
+                    corpse_id: cursor.u32_le(),
+                })
+            }
             0x75 => {
                 let mut cursor = PacketCursor::new(input, 13)?;
                 Ok(Self::PlayerPartyInfo {
@@ -1552,6 +1609,17 @@ impl ServerMessage {
                     pong6_warden: cursor.u32_le(),
                     pong7_warden: cursor.u32_le(),
                     pong8_warden: cursor.u32_le(),
+                })
+            }
+            0x81 => {
+                let mut cursor = PacketCursor::new(input, 20)?;
+                Ok(Self::AssignMerc {
+                    skill_id: cursor.u8(),
+                    summon_type: cursor.u16_le(),
+                    player_id: cursor.u32_le(),
+                    merc_id: cursor.u32_le(),
+                    seed2: cursor.u32_le(),
+                    init_seed: cursor.u32_le(),
                 })
             }
             0x90 => {
@@ -1647,6 +1715,74 @@ impl ServerMessage {
                     state: cursor.u8(),
                 })
             }
+            0x9B => {
+                let mut cursor = PacketCursor::new(input, 7)?;
+                Ok(Self::MercReviveCost {
+                    merc_name_id: cursor.u16_le(),
+                    revive_cost: cursor.u16_le(),
+                    unused: cursor.u16_le(),
+                })
+            }
+            0x9E => {
+                let mut cursor = PacketCursor::new(input, 7)?;
+                Ok(Self::MercAttributeU8 {
+                    attribute: cursor.u8(),
+                    merc_id: cursor.u32_le(),
+                    amount: cursor.u8(),
+                })
+            }
+            0x9F => {
+                let mut cursor = PacketCursor::new(input, 8)?;
+                Ok(Self::MercAttributeU16 {
+                    attribute: cursor.u8(),
+                    merc_id: cursor.u32_le(),
+                    amount: cursor.u16_le(),
+                })
+            }
+            0xA0 => {
+                let mut cursor = PacketCursor::new(input, 10)?;
+                Ok(Self::MercAttributeU32 {
+                    attribute: cursor.u8(),
+                    merc_id: cursor.u32_le(),
+                    amount: cursor.u32_le(),
+                })
+            }
+            0xA1 => {
+                let mut cursor = PacketCursor::new(input, 7)?;
+                Ok(Self::MercAddExpU8 {
+                    stat_id: cursor.u8(),
+                    merc_id: cursor.u32_le(),
+                    value: cursor.u8(),
+                })
+            }
+            0xA2 => {
+                let mut cursor = PacketCursor::new(input, 8)?;
+                Ok(Self::MercAddExpU16 {
+                    stat_id: cursor.u8(),
+                    merc_id: cursor.u32_le(),
+                    value: cursor.u16_le(),
+                })
+            }
+            0xA8 => {
+                let mut cursor = PacketCursor::new_variable(input, 8, 6)?;
+                let unit_type = cursor.u8();
+                let unit_id = cursor.u32_le();
+                let packet_size = cursor.u8();
+                if packet_size as usize != input.len() {
+                    return Err(ServerMessageParseError::UnexpectedLength {
+                        packet_id,
+                        expected: packet_size as usize,
+                        actual: input.len(),
+                    });
+                }
+                Ok(Self::SetState {
+                    unit_type,
+                    unit_id,
+                    packet_size,
+                    state: cursor.u8(),
+                    state_effects: cursor.remaining().to_vec(),
+                })
+            }
             0xAB => {
                 let mut cursor = PacketCursor::new(input, 7)?;
                 Ok(Self::NpcHeal {
@@ -1678,6 +1814,25 @@ impl ServerMessage {
                     life_percent,
                     packet_size,
                     bitstream: cursor.remaining().to_vec(),
+                })
+            }
+            0xAA => {
+                let mut cursor = PacketCursor::new_variable(input, 7, 6)?;
+                let unit_type = cursor.u8();
+                let unit_id = cursor.u32_le();
+                let packet_size = cursor.u8();
+                if packet_size as usize != input.len() {
+                    return Err(ServerMessageParseError::UnexpectedLength {
+                        packet_id,
+                        expected: packet_size as usize,
+                        actual: input.len(),
+                    });
+                }
+                Ok(Self::MultiStates {
+                    unit_type,
+                    unit_id,
+                    packet_size,
+                    state_effects: cursor.remaining().to_vec(),
                 })
             }
             0xAF => {
@@ -1796,7 +1951,7 @@ impl<'a> PacketCursor<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ServerMessage, ServerMessageParseError, SkillDescription};
+    use super::{ServerMessage, ServerMessageParseError, SkillDescription, UnitPositionUpdate};
     use crate::core::network::d2gs::D2GSReader;
 
     #[test]
@@ -2011,6 +2166,205 @@ mod tests {
                 item_id: 0x5566_7788,
                 and_value: 0xAABB_CCDD,
                 flags: 0x1122_3344,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_multiple_units_coords_update_reads_all_units() {
+        let message = ServerMessage::parse(&[
+            0x16, 0xAA, 0xBB, 0x02, 0x00, 0x44, 0x33, 0x22, 0x11, 0x10, 0x00, 0x20, 0x00, 0x01,
+            0x88, 0x77, 0x66, 0x55, 0x30, 0x00, 0x40, 0x00,
+        ])
+        .expect("bulk position update should parse");
+
+        assert_eq!(
+            message,
+            ServerMessage::MultipleUnitsCoordsUpdate {
+                unused_1: 0xAA,
+                unused_2: 0xBB,
+                count: 2,
+                units: vec![
+                    UnitPositionUpdate {
+                        unit_type: 0,
+                        unit_id: 0x1122_3344,
+                        x: 16,
+                        y: 32,
+                    },
+                    UnitPositionUpdate {
+                        unit_type: 1,
+                        unit_id: 0x5566_7788,
+                        x: 48,
+                        y: 64,
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn parse_multiple_units_coords_update_rejects_size_mismatch() {
+        let error = ServerMessage::parse(&[
+            0x16, 0x00, 0x00, 0x02, 0x00, 0x44, 0x33, 0x22, 0x11, 0x10, 0x00, 0x20,
+        ])
+        .expect_err("truncated bulk position update should fail");
+
+        assert_eq!(
+            error,
+            ServerMessageParseError::UnexpectedLength {
+                packet_id: 0x16,
+                expected: 22,
+                actual: 12,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_missile_data_reads_projectile_coordinates_and_owner() {
+        let message = ServerMessage::parse(&[
+            0x73, 0x78, 0x56, 0x34, 0x12, 0x9A, 0x00, 0x10, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00,
+            0x00, 0x30, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x07, 0x00, 0x01, 0x04, 0x03,
+            0x02, 0x01, 0x05, 0x06,
+        ])
+        .expect("missile data should parse");
+
+        assert_eq!(
+            message,
+            ServerMessage::MissileData {
+                missile_id: 0x1234_5678,
+                missile_class: 0x009A,
+                missile_x: 16,
+                missile_y: 32,
+                target_x: 48,
+                target_y: 64,
+                current_frame: 7,
+                owner_type: 1,
+                owner_id: 0x0102_0304,
+                skill_level: 5,
+                pierce_level: 6,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_player_corpse_assign_reads_owner_and_corpse_ids() {
+        let message =
+            ServerMessage::parse(&[0x74, 0x01, 0x44, 0x33, 0x22, 0x11, 0x88, 0x77, 0x66, 0x55])
+                .expect("player corpse assign should parse");
+
+        assert_eq!(
+            message,
+            ServerMessage::PlayerCorpseAssign {
+                assign: 1,
+                owner_id: 0x1122_3344,
+                corpse_id: 0x5566_7788,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_merc_packets_read_assignment_and_stat_updates() {
+        assert_eq!(
+            ServerMessage::parse(&[
+                0x81, 0x0A, 0x52, 0x01, 0x44, 0x33, 0x22, 0x11, 0x88, 0x77, 0x66, 0x55, 0xCC, 0xBB,
+                0xAA, 0x99, 0x00, 0xFF, 0xEE, 0xDD,
+            ])
+            .expect("merc assign should parse"),
+            ServerMessage::AssignMerc {
+                skill_id: 0x0A,
+                summon_type: 0x0152,
+                player_id: 0x1122_3344,
+                merc_id: 0x5566_7788,
+                seed2: 0x99AA_BBCC,
+                init_seed: 0xDDEE_FF00,
+            }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[0x9B, 0x34, 0x12, 0x78, 0x56, 0x00, 0x00])
+                .expect("merc revive cost should parse"),
+            ServerMessage::MercReviveCost {
+                merc_name_id: 0x1234,
+                revive_cost: 0x5678,
+                unused: 0,
+            }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[0x9E, 0x0C, 0x88, 0x77, 0x66, 0x55, 0x63])
+                .expect("merc u8 stat should parse"),
+            ServerMessage::MercAttributeU8 {
+                attribute: 0x0C,
+                merc_id: 0x5566_7788,
+                amount: 0x63,
+            }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[0x9F, 0x0D, 0x88, 0x77, 0x66, 0x55, 0x34, 0x12])
+                .expect("merc u16 stat should parse"),
+            ServerMessage::MercAttributeU16 {
+                attribute: 0x0D,
+                merc_id: 0x5566_7788,
+                amount: 0x1234,
+            }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[0xA0, 0x0E, 0x88, 0x77, 0x66, 0x55, 0x78, 0x56, 0x34, 0x12,])
+                .expect("merc u32 stat should parse"),
+            ServerMessage::MercAttributeU32 {
+                attribute: 0x0E,
+                merc_id: 0x5566_7788,
+                amount: 0x1234_5678,
+            }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[0xA1, 0x0D, 0x88, 0x77, 0x66, 0x55, 0x05])
+                .expect("merc exp u8 should parse"),
+            ServerMessage::MercAddExpU8 {
+                stat_id: 0x0D,
+                merc_id: 0x5566_7788,
+                value: 0x05,
+            }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[0xA2, 0x0D, 0x88, 0x77, 0x66, 0x55, 0x34, 0x12])
+                .expect("merc exp u16 should parse"),
+            ServerMessage::MercAddExpU16 {
+                stat_id: 0x0D,
+                merc_id: 0x5566_7788,
+                value: 0x1234,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_state_packets_preserve_variable_effect_payloads() {
+        assert_eq!(
+            ServerMessage::parse(&[
+                0xA8, 0x01, 0x44, 0x33, 0x22, 0x11, 0x0B, 0x69, 0xAA, 0xBB, 0xCC,
+            ])
+            .expect("set state should parse"),
+            ServerMessage::SetState {
+                unit_type: 1,
+                unit_id: 0x1122_3344,
+                packet_size: 0x0B,
+                state: 0x69,
+                state_effects: vec![0xAA, 0xBB, 0xCC],
+            }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[0xAA, 0x00, 0x88, 0x77, 0x66, 0x55, 0x0A, 0x01, 0x02, 0x03])
+                .expect("multi states should parse"),
+            ServerMessage::MultiStates {
+                unit_type: 0,
+                unit_id: 0x5566_7788,
+                packet_size: 0x0A,
+                state_effects: vec![0x01, 0x02, 0x03],
             }
         );
     }

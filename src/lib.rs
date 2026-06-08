@@ -17,10 +17,13 @@ pub use crate::core::data::{
     GameData, GameDataError, ItemRecord, LevelRecord, MonsterRecord, MonsterStateRecord,
     ObjectRecord,
 };
+pub use crate::core::entity::mercenary::{Mercenary, MercenaryClass};
+pub use crate::core::entity::missile::Missile;
 pub use crate::core::entity::npc::Npc;
 pub use crate::core::entity::player::{Player, PlayerMovement, PlayerSkillLevels, PlayerVitals};
 pub use crate::core::game_state::{
-    Difficulty, GameMapState, GameServerType, GameState, ItemStatUpdate, Locale,
+    Difficulty, GameMapState, GameServerType, GameState, ItemStatUpdate, Locale, PlayerCorpse,
+    UnitKey, UnitStateSet,
 };
 pub use crate::core::inventory::{
     GridSize, InventoryProfile, ItemParent, ItemPosition, StoredItemContainer,
