@@ -22,7 +22,9 @@ read-only MPQ v1 archive extractor for Classic/LoD installs; typed `.tbl`/`.bin`
 static-data loading for monster, object, level, and item-name resolution; and
 generated-map/collision data structures. Legacy Classic/LoD export can now write
 a standalone fixed-section `.d2s` from live local-player state, including
-`0x94`-derived class skills, but item records are still empty. Native
+`0x94`-derived class skills and direct inventory items reconstructed from live
+item packets. Equipment, stash/cube, and broader item/save semantics still need
+follow-up work. Native
 seed-to-layout map generation, pathfinding, DS1/DT1 map asset ingestion, full
 item stat-list interpretation, and semantic save editing remain future work.
 
@@ -32,7 +34,7 @@ The crate now resolves dependencies and passes:
 cargo test
 ```
 
-The current suite has 128 unit tests.
+The current suite has 129 unit tests.
 
 ## Work Completed
 
@@ -243,6 +245,22 @@ The current suite has 128 unit tests.
 - Added parser and state-transition tests for `0x52`, including representative
   Act I and Act V progressions where mandatory/dependent quests advance while
   optional quests remain incomplete.
+- Added standalone legacy `.d2s` export support for local-player inventory
+  items. The exporter now populates the first `JM` item list from packet-owned
+  inventory items, reuses preserved raw trailing item-stat bits, and keeps the
+  corpse/expansion trailer sections intact.
+- Added an export test that verifies direct inventory items are emitted into the
+  player item list while non-inventory local items are still excluded.
+- Updated standalone legacy export to force current HP/MP to the exported
+  max-life/max-mana values so downloaded characters enter a game with full
+  resources even when the live capture happened while hurt or low on mana.
+- Fixed legacy save-item header translation so exported local inventory and
+  equipped items use save-format mode/location fields instead of packet-format
+  destination bits, and added focused tests for both layouts.
+- Added a D2GS framing-resync safeguard for live TCP capture: when the byte
+  splitter accumulates an implausibly large partial payload, it now drops the
+  poisoned buffer, retries the latest TCP payload from a clean boundary, and
+  resumes packet decoding instead of freezing the overlay state indefinitely.
 - Wired known-object state updates from `0x0E` into `GameState`, including
   portal flags, targetability, and the raw object state value.
 - Fixed `0x3E` item-stat update handling for LoD 1.14d's padded 34-byte packet

@@ -33,6 +33,7 @@ use crate::core::update::Update;
 
 const LEGACY_D2GS_PORT: u16 = 4000;
 const D2R_BNET_PORT: u16 = 1119;
+const MAX_BUFFERED_D2GS_BYTES: usize = 1024;
 
 /// Transport classification for captured Diablo II traffic.
 ///
@@ -121,6 +122,13 @@ pub enum ConnectionTransportWarning {
     BufferedD2gsPayload {
         payload_len: usize,
         buffered_len: usize,
+    },
+    /// The D2GS byte-stream splitter accumulated too much unread data, so the
+    /// buffered framing state was discarded and the latest TCP payload was
+    /// retried from a clean boundary.
+    D2gsFramingReset {
+        payload_len: usize,
+        discarded_len: usize,
     },
 }
 
@@ -660,28 +668,26 @@ impl Connection {
         let mut emitted_packet = false;
 
         self.d2gs_reader.read(payload);
-        while let Some(packet) = self.d2gs_reader.next() {
-            emitted_packet = true;
-            match ServerMessage::try_from(&packet) {
-                Ok(message) => {
-                    let applied = game_state.update(message.clone());
-                    on_event(
-                        ConnectionEvent::ServerMessage {
-                            packet,
-                            message,
-                            applied,
-                        },
-                        game_state,
-                    );
-                }
-                Err(error) => {
-                    on_event(ConnectionEvent::ParseError { packet, error }, game_state);
-                }
-            }
-        }
+        emitted_packet |= emit_buffered_packets(&mut self.d2gs_reader, game_state, on_event);
 
         let buffered_len = self.d2gs_reader.buffered_len();
         if !payload.is_empty() && !emitted_packet && buffered_len > buffered_before {
+            if buffered_len >= MAX_BUFFERED_D2GS_BYTES {
+                self.d2gs_reader.reset();
+                on_event(
+                    ConnectionEvent::TransportWarning {
+                        warning: ConnectionTransportWarning::D2gsFramingReset {
+                            payload_len: payload.len(),
+                            discarded_len: buffered_len,
+                        },
+                    },
+                    game_state,
+                );
+
+                self.d2gs_reader.read(payload);
+                emit_buffered_packets(&mut self.d2gs_reader, game_state, on_event);
+                return;
+            }
             on_event(
                 ConnectionEvent::TransportWarning {
                     warning: ConnectionTransportWarning::BufferedD2gsPayload {
@@ -695,11 +701,42 @@ impl Connection {
     }
 }
 
+fn emit_buffered_packets<F>(
+    reader: &mut D2GSReader,
+    game_state: &mut GameState,
+    on_event: &mut F,
+) -> bool
+where
+    F: FnMut(ConnectionEvent, &GameState),
+{
+    let mut emitted_packet = false;
+    while let Some(packet) = reader.next() {
+        emitted_packet = true;
+        match ServerMessage::try_from(&packet) {
+            Ok(message) => {
+                let applied = game_state.update(message.clone());
+                on_event(
+                    ConnectionEvent::ServerMessage {
+                        packet,
+                        message,
+                        applied,
+                    },
+                    game_state,
+                );
+            }
+            Err(error) => {
+                on_event(ConnectionEvent::ParseError { packet, error }, game_state);
+            }
+        }
+    }
+    emitted_packet
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         classify_transport, CapturedTransport, Connection, ConnectionEvent,
-        ConnectionTransportWarning, D2R_BNET_PORT, LEGACY_D2GS_PORT,
+        ConnectionTransportWarning, D2R_BNET_PORT, LEGACY_D2GS_PORT, MAX_BUFFERED_D2GS_BYTES,
     };
     use crate::core::game_state::GameState;
     use crate::core::protocol::server_message::ServerMessageParseError;
@@ -805,6 +842,45 @@ mod tests {
             }
             other => panic!("unexpected connection event: {:?}", other),
         }
+    }
+
+    #[test]
+    fn process_d2gs_payload_recovers_after_framing_desync() {
+        let mut connection = Connection::new();
+        let mut state = GameState::default();
+
+        let poison_events = connection.process_d2gs_payload(&[0xAE, 0xFF, 0x7F], &mut state);
+        assert!(poison_events.iter().any(|event| matches!(
+            event,
+            ConnectionEvent::TransportWarning {
+                warning: ConnectionTransportWarning::BufferedD2gsPayload {
+                    payload_len: 3,
+                    buffered_len: 3,
+                }
+            }
+        )));
+
+        let payload = [0x07, 0x70, 0x04, 0x78, 0x03, 0x01].repeat(200);
+        let recovery_events = connection.process_d2gs_payload(&payload, &mut state);
+
+        assert!(recovery_events.iter().any(|event| matches!(
+            event,
+            ConnectionEvent::TransportWarning {
+                warning: ConnectionTransportWarning::D2gsFramingReset {
+                    payload_len,
+                    discarded_len,
+                }
+            } if *payload_len == payload.len() && *discarded_len >= MAX_BUFFERED_D2GS_BYTES
+        )));
+        assert!(recovery_events.iter().any(|event| matches!(
+            event,
+            ConnectionEvent::ServerMessage {
+                message: ServerMessage::MapReveal { .. },
+                applied: true,
+                ..
+            }
+        )));
+        assert!(!state.map().revealed_tiles.is_empty());
     }
 
     #[test]

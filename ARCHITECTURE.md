@@ -65,6 +65,8 @@ src/core/
     conservative .d2s header parser, checksum validator, stats/skills parser,
     item-related section-header scanner, D2R v105 header handling,
     raw-preserving loader/saver, and legacy GameState-to-save export
+    including standalone local inventory/equipment item emission, full-current
+    HP/MP normalization from max stats, and save-item mode/location translation
 
   mpq.rs
     MPQ v1 header/table structs, hashing, decryption-key derivation,

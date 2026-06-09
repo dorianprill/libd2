@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::io;
@@ -7,6 +8,7 @@ use crate::core::character_class::CharacterClass;
 use crate::core::entity::player::Player;
 use crate::core::game_state::GameState;
 use crate::core::inventory::InventoryProfile;
+use crate::core::object::item::{Item, ItemContainer, ItemDestination, ItemOwner, ItemQuality};
 use crate::core::unit_stat::UnitStat;
 use crate::core::version::{detect_edition, CharacterStatus, GameEdition, SaveVersion};
 
@@ -407,7 +409,7 @@ impl CharacterFile {
         let mut raw = build_legacy_fixed_pre_stats_block(&snapshot);
         raw.extend_from_slice(&stats_section);
         raw.extend_from_slice(&skills_section);
-        append_empty_legacy_item_sections(&mut raw, snapshot.status.expansion);
+        append_legacy_item_sections(&mut raw, state, snapshot.status.expansion);
         fix_header(&mut raw);
 
         Self::parse(raw).map_err(CharacterExportError::CharacterFile)
@@ -858,6 +860,13 @@ fn legacy_character_stats_from_player(player: &Player) -> Vec<(CharacterStat, u3
         }
     }
 
+    if let Some(max_life) = player.stat(UnitStat::LifeMax as u16) {
+        upsert_stat(&mut stats, CharacterStat::HitPoints, max_life);
+    }
+    if let Some(max_mana) = player.stat(UnitStat::ManaMax as u16) {
+        upsert_stat(&mut stats, CharacterStat::Mana, max_mana);
+    }
+
     stats
 }
 
@@ -987,8 +996,8 @@ fn write_empty_legacy_npc_dialogs(raw: &mut [u8]) {
     raw[LEGACY_NPC_HEADER_OFFSET..LEGACY_NPC_HEADER_OFFSET + 2].copy_from_slice(b"w4");
 }
 
-fn append_empty_legacy_item_sections(raw: &mut Vec<u8>, is_expansion: bool) {
-    append_empty_item_list(raw);
+fn append_legacy_item_sections(raw: &mut Vec<u8>, state: &GameState, is_expansion: bool) {
+    append_player_inventory_item_list(raw, state);
     append_empty_item_list(raw);
 
     if is_expansion {
@@ -1001,6 +1010,402 @@ fn append_empty_legacy_item_sections(raw: &mut Vec<u8>, is_expansion: bool) {
 fn append_empty_item_list(raw: &mut Vec<u8>) {
     raw.extend_from_slice(SaveSectionMarker::ItemList.raw_bytes());
     raw.extend_from_slice(&0u16.to_le_bytes());
+}
+
+fn append_player_inventory_item_list(raw: &mut Vec<u8>, state: &GameState) {
+    let Some(local_player_id) = state.local_player_id() else {
+        append_empty_item_list(raw);
+        return;
+    };
+
+    let socketed_children = local_socketed_children(state);
+    let mut top_level_items: Vec<_> = state
+        .items()
+        .iter()
+        .filter_map(|(item_id, item)| {
+            is_local_export_item(item, local_player_id).then_some(*item_id)
+        })
+        .collect();
+    top_level_items.sort_by_key(|item_id| inventory_sort_key(state.item(*item_id)));
+
+    let mut encoded_items = Vec::new();
+    for item_id in top_level_items {
+        let mut visited = HashSet::new();
+        if let Some(bytes) =
+            encode_legacy_item_tree(state, item_id, &socketed_children, &mut visited)
+        {
+            encoded_items.push(bytes);
+        }
+    }
+
+    raw.extend_from_slice(SaveSectionMarker::ItemList.raw_bytes());
+    raw.extend_from_slice(&(encoded_items.len() as u16).to_le_bytes());
+    for item_bytes in encoded_items {
+        raw.extend_from_slice(&item_bytes);
+    }
+}
+
+fn local_socketed_children(state: &GameState) -> HashMap<u32, Vec<u32>> {
+    let mut children = HashMap::<u32, Vec<u32>>::new();
+    for (item_id, item) in state.items() {
+        if let ItemOwner::Unit {
+            unit_type: 0x04,
+            unit_id,
+        } = item.owner()
+        {
+            children.entry(unit_id).or_default().push(*item_id);
+        }
+    }
+    for child_ids in children.values_mut() {
+        child_ids.sort_unstable();
+    }
+    children
+}
+
+fn is_local_export_item(item: &Item, local_player_id: u32) -> bool {
+    matches!(
+        item.owner(),
+        ItemOwner::Unit {
+            unit_type: 0x00,
+            unit_id,
+        } if unit_id == local_player_id
+    ) && matches!(
+        save_item_location(item),
+        Some(SaveItemLocation::Inventory { .. } | SaveItemLocation::Equipped { .. })
+    )
+}
+
+fn inventory_sort_key(item: Option<&Item>) -> (u8, u8, u8, u32) {
+    let Some(item) = item else {
+        return (u8::MAX, u8::MAX, u8::MAX, u32::MAX);
+    };
+    let Some(location) = save_item_location(item) else {
+        return (u8::MAX, u8::MAX, u8::MAX, item.id());
+    };
+    match location {
+        SaveItemLocation::Equipped { slot } => (0, slot, 0, item.id()),
+        SaveItemLocation::Inventory { x, y } => (1, y, x, item.id()),
+        SaveItemLocation::Socketed => (2, 0, 0, item.id()),
+    }
+}
+
+fn encode_legacy_item_tree(
+    state: &GameState,
+    item_id: u32,
+    socketed_children: &HashMap<u32, Vec<u32>>,
+    visited: &mut HashSet<u32>,
+) -> Option<Vec<u8>> {
+    if !visited.insert(item_id) {
+        return None;
+    }
+
+    let item = state.item(item_id)?;
+    let mut encoded_children = Vec::new();
+    if let Some(child_ids) = socketed_children.get(&item_id) {
+        for child_id in child_ids {
+            if let Some(bytes) =
+                encode_legacy_item_tree(state, *child_id, socketed_children, visited)
+            {
+                encoded_children.push(bytes);
+            }
+        }
+    }
+
+    let mut bytes = encode_legacy_item(item, encoded_children.len() as u8)?;
+    for child_bytes in encoded_children {
+        bytes.extend_from_slice(&child_bytes);
+    }
+    Some(bytes)
+}
+
+fn encode_legacy_item(item: &Item, socketed_children: u8) -> Option<Vec<u8>> {
+    let packet = item.packet_data()?;
+    if packet.flags.is_ear() || packet.flags.is_gamble() {
+        return None;
+    }
+
+    let code = packet.code.as_ref()?;
+    let location = save_item_location(item)?;
+    let mut writer = SaveBitWriter::default();
+    writer.write_bits(0x4d4a, 16);
+    writer.write_bits(packet.flags.bits(), 32);
+    writer.write_bits(packet.version as u32, 10);
+
+    match location {
+        SaveItemLocation::Inventory { x, y } => {
+            writer.write_bits(0, 3);
+            writer.write_bits(0, 4);
+            writer.write_bits(x as u32, 4);
+            writer.write_bits(y as u32, 4);
+            writer.write_bits(0, 3);
+        }
+        SaveItemLocation::Equipped { slot } => {
+            writer.write_bits(1, 3);
+            writer.write_bits(slot as u32, 4);
+            writer.write_bits(0, 4);
+            writer.write_bits(0, 4);
+            writer.write_bits(0, 3);
+        }
+        SaveItemLocation::Socketed => {
+            writer.write_bits(0x6, 3);
+            writer.write_bits(0, 4);
+            writer.write_bits(0, 4);
+            writer.write_bits(0, 4);
+            writer.write_bits(0, 3);
+        }
+    }
+
+    for byte in code.raw() {
+        writer.write_bits(byte as u32, 8);
+    }
+
+    let socket_count_bits = if packet.flags.is_simple_item() { 1 } else { 3 };
+    writer.write_bits(socketed_children as u32, socket_count_bits);
+    if packet.flags.is_simple_item() {
+        writer.align_to_byte();
+        return Some(writer.finish());
+    }
+
+    writer.write_bits(item.id(), 32);
+    writer.write_bits(packet.level? as u32, 7);
+    let quality = packet.quality?;
+    writer.write_bits(save_item_quality(quality) as u32, 4);
+
+    writer.write_bool(packet.graphic.is_some());
+    if let Some(graphic) = packet.graphic {
+        writer.write_bits(graphic as u32, 3);
+    }
+
+    writer.write_bool(false);
+
+    match quality {
+        ItemQuality::Inferior | ItemQuality::Superior => {
+            writer.write_bits(packet.quality_modifier.unwrap_or_default() as u32, 3);
+        }
+        ItemQuality::Magic => {
+            writer.write_bits(packet.magic_prefix.unwrap_or_default() as u32, 11);
+            writer.write_bits(packet.magic_suffix.unwrap_or_default() as u32, 11);
+        }
+        ItemQuality::Rare | ItemQuality::Crafted => {
+            let rare_name = packet.rare_name.unwrap_or([0, 0]);
+            writer.write_bits(rare_name[0] as u32, 8);
+            writer.write_bits(rare_name[1] as u32, 8);
+            for affix in packet.rare_affixes {
+                writer.write_bool(affix.prefix.is_some());
+                if let Some(prefix) = affix.prefix {
+                    writer.write_bits(prefix as u32, 11);
+                }
+                writer.write_bool(affix.suffix.is_some());
+                if let Some(suffix) = affix.suffix {
+                    writer.write_bits(suffix as u32, 11);
+                }
+            }
+        }
+        ItemQuality::Set | ItemQuality::Unique => {
+            writer.write_bits(packet.code_extra.unwrap_or_default() as u32, 12);
+        }
+        ItemQuality::NotApplicable | ItemQuality::Normal | ItemQuality::Unknown(_) => {}
+    }
+
+    if let Some(runeword) = packet.runeword {
+        writer.write_bits(runeword.id as u32, 12);
+        let _ = runeword.parameter;
+        writer.write_bits(5, 4);
+    }
+
+    if let Some(name) = packet.personalized_name.as_deref() {
+        write_legacy_item_name(&mut writer, name);
+    }
+
+    if matches!(code.as_str(), "tbk" | "ibk") {
+        writer.write_bits(packet.magic_suffix.unwrap_or_default() as u32, 5);
+    }
+
+    writer.write_bool(false);
+
+    if item.category_kind() == crate::core::object::item::ItemCategory::Armor {
+        writer.write_bits(
+            packet.defense.unwrap_or_default().saturating_add(10) as u32,
+            11,
+        );
+    }
+
+    if matches!(
+        item.category_kind(),
+        crate::core::object::item::ItemCategory::Armor
+            | crate::core::object::item::ItemCategory::Weapon
+            | crate::core::object::item::ItemCategory::Weapon2
+            | crate::core::object::item::ItemCategory::Shield
+    ) {
+        if let Some(durability) = packet.durability {
+            writer.write_bits(durability.max as u32, 8);
+            writer.write_bits(durability.current as u32, 8);
+            writer.write_bool(false);
+        }
+    }
+
+    if packet.flags.is_socketed() {
+        writer.write_bits(packet.sockets.unwrap_or_default() as u32, 4);
+    }
+
+    let tail_offset = packet_stat_list_offset(item)?;
+    writer.write_raw_tail(item.raw_bitstream(), tail_offset);
+    writer.align_to_byte();
+    Some(writer.finish())
+}
+
+fn save_item_quality(quality: ItemQuality) -> u8 {
+    match quality {
+        ItemQuality::NotApplicable => 0,
+        ItemQuality::Inferior => 1,
+        ItemQuality::Normal => 2,
+        ItemQuality::Superior => 3,
+        ItemQuality::Magic => 4,
+        ItemQuality::Set => 5,
+        ItemQuality::Rare => 6,
+        ItemQuality::Unique => 7,
+        ItemQuality::Crafted => 8,
+        ItemQuality::Unknown(value) => value,
+    }
+}
+
+fn write_legacy_item_name(writer: &mut SaveBitWriter, name: &str) {
+    for byte in name.bytes() {
+        writer.write_bits(byte as u32, 7);
+    }
+    writer.write_bits(0, 7);
+}
+
+fn packet_stat_list_offset(item: &Item) -> Option<usize> {
+    let packet = item.packet_data()?;
+    let raw = item.raw_bitstream();
+    let mut bit_offset = 32 + 8 + 2;
+    let destination = ItemDestination::from_packet_value(read_bits(raw, bit_offset, 3)? as u8);
+    bit_offset += 3;
+
+    bit_offset += match destination {
+        ItemDestination::Ground => 16 + 16,
+        _ => 4 + 4 + 3 + 4,
+    };
+
+    if packet.flags.is_ear() {
+        return None;
+    }
+
+    bit_offset += 8 * 4;
+    if packet.code.as_ref()?.as_str() == "gld" {
+        return None;
+    }
+
+    bit_offset += 3;
+    if packet.flags.is_simple_item() || packet.flags.is_gamble() {
+        return Some(bit_offset);
+    }
+
+    bit_offset += 7 + 4;
+    let has_graphic = read_bits(raw, bit_offset, 1)? != 0;
+    bit_offset += 1;
+    if has_graphic {
+        bit_offset += 3;
+    }
+
+    let has_color = read_bits(raw, bit_offset, 1)? != 0;
+    bit_offset += 1;
+    if has_color {
+        bit_offset += 11;
+    }
+
+    if packet.flags.is_identified() {
+        match packet.quality? {
+            ItemQuality::Unique => {
+                if packet.code.as_ref()?.as_str() != "std" {
+                    bit_offset += 12;
+                }
+            }
+            ItemQuality::Inferior | ItemQuality::Superior => {
+                bit_offset += 3;
+            }
+            ItemQuality::Magic => {
+                bit_offset += 11 + 11;
+            }
+            ItemQuality::Rare | ItemQuality::Crafted => {
+                bit_offset += 8 + 8;
+                for affix in packet.rare_affixes {
+                    bit_offset += 1;
+                    if affix.prefix.is_some() {
+                        bit_offset += 11;
+                    }
+                    bit_offset += 1;
+                    if affix.suffix.is_some() {
+                        bit_offset += 11;
+                    }
+                }
+            }
+            ItemQuality::Set => {
+                bit_offset += 12;
+            }
+            ItemQuality::NotApplicable | ItemQuality::Normal | ItemQuality::Unknown(_) => {}
+        }
+
+        if packet.runeword.is_some() {
+            bit_offset += 12 + 4;
+        }
+        if let Some(name) = packet.personalized_name.as_deref() {
+            bit_offset += (name.len() + 1) * 8;
+        }
+        if item.category_kind() == crate::core::object::item::ItemCategory::Armor {
+            bit_offset += 11;
+        }
+        if matches!(
+            item.category_kind(),
+            crate::core::object::item::ItemCategory::Armor
+                | crate::core::object::item::ItemCategory::Weapon
+                | crate::core::object::item::ItemCategory::Weapon2
+                | crate::core::object::item::ItemCategory::Shield
+        ) && packet.durability.is_some()
+        {
+            bit_offset += 8 + 8 + 1;
+        }
+        if packet.flags.is_socketed() {
+            bit_offset += 4;
+        }
+    }
+
+    Some(bit_offset)
+}
+
+fn save_item_location(item: &Item) -> Option<SaveItemLocation> {
+    let packet = item.packet_data()?;
+    match item.owner() {
+        ItemOwner::Unit {
+            unit_type: 0x04, ..
+        } => Some(SaveItemLocation::Socketed),
+        _ => match packet.placement {
+            crate::core::object::item::ItemPlacement::Ground { .. } => None,
+            crate::core::object::item::ItemPlacement::Container {
+                x, y, container, ..
+            } if ItemContainer::from_packet_value(container) == ItemContainer::Inventory => {
+                Some(SaveItemLocation::Inventory { x, y })
+            }
+            crate::core::object::item::ItemPlacement::Container {
+                equipment_location, ..
+            } if packet.destination == ItemDestination::Equipment
+                || packet.placement.container_kind() == Some(ItemContainer::Equipment) =>
+            {
+                Some(SaveItemLocation::Equipped {
+                    slot: equipment_location,
+                })
+            }
+            _ => None,
+        },
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SaveItemLocation {
+    Inventory { x: u8, y: u8 },
+    Equipped { slot: u8 },
+    Socketed,
 }
 
 fn replace_legacy_export_sections(
@@ -1152,6 +1557,24 @@ impl SaveBitWriter {
     fn finish(self) -> Vec<u8> {
         self.bytes
     }
+
+    fn write_bool(&mut self, value: bool) {
+        self.write_bits(value as u32, 1);
+    }
+
+    fn write_raw_tail(&mut self, raw: &[u8], bit_offset: usize) {
+        for position in bit_offset..raw.len() * 8 {
+            let bit = (raw[position / 8] >> (position % 8)) & 1;
+            self.write_bits(bit as u32, 1);
+        }
+    }
+
+    fn align_to_byte(&mut self) {
+        let remainder = self.bit_offset % 8;
+        if remainder != 0 {
+            self.write_bits(0, 8 - remainder);
+        }
+    }
 }
 
 fn header_layout(version: SaveVersion) -> CharacterHeaderLayout {
@@ -1221,13 +1644,14 @@ fn fixed_c_string(bytes: &[u8]) -> String {
 mod tests {
     use crate::core::game_state::GameState;
     use crate::core::inventory::GridSize;
+    use crate::core::object::item::{Item, ItemContainer, ItemDestination, ItemFlags};
     use crate::core::unit_stat::UnitStat;
     use crate::core::update::Update;
     use crate::core::version::{CharacterStatus, GameEdition, SaveVersion};
     use crate::{CharacterClass, ServerMessage, SkillDescription};
 
     use super::{
-        calculate_checksum, CharacterExportError, CharacterExportOptions, CharacterFile,
+        calculate_checksum, read_bits, CharacterExportError, CharacterExportOptions, CharacterFile,
         CharacterFileError, CharacterHeaderLayout, CharacterProgression, CharacterStat,
         SaveSectionMarker, CHECKSUM_OFFSET, D2R_LEGACY_NAME_OFFSET, D2R_V105_CLASS_OFFSET,
         D2R_V105_HEADER_LEN, D2R_V105_LEVEL_OFFSET, D2R_V105_MERC_ID_OFFSET,
@@ -1483,8 +1907,10 @@ mod tests {
         assert_eq!(file.stat(CharacterStat::Energy), Some(35));
         assert_eq!(file.stat(CharacterStat::Level), Some(42));
         assert_eq!(file.stat(CharacterStat::Experience), Some(123_456));
-        assert_eq!(file.stat(CharacterStat::HitPoints), Some(777));
+        assert_eq!(file.stat(CharacterStat::HitPoints), Some(2048));
         assert_eq!(file.stat(CharacterStat::MaxHitPoints), Some(2048));
+        assert_eq!(file.stat(CharacterStat::Mana), Some(4096));
+        assert_eq!(file.stat(CharacterStat::MaxMana), Some(4096));
         let parsed_skills = file.skills().expect("skills should be exported");
         assert_eq!(parsed_skills.level_at_slot(0), Some(1));
         assert_eq!(parsed_skills.level_at_slot(12), Some(20));
@@ -1566,6 +1992,109 @@ mod tests {
         .expect_err("empty state cannot export");
 
         assert!(matches!(error, CharacterExportError::NoLocalPlayer));
+    }
+
+    #[test]
+    fn exports_local_inventory_items_into_player_item_list() {
+        let mut state = build_export_state();
+        state.items.insert(
+            0x2000,
+            Item::from_owned_packet(
+                0x2000,
+                0x04,
+                0x10,
+                0,
+                0x1000,
+                inventory_item_bitstream("cm1", 2, 3, 0x02),
+            ),
+        );
+        state.items.insert(
+            0x3000,
+            Item::from_owned_packet(
+                0x3000,
+                0x04,
+                0x10,
+                0,
+                0x1000,
+                inventory_item_bitstream("cm2", 1, 1, 0x0A),
+            ),
+        );
+
+        let file = CharacterFile::export_legacy_from_game_state(
+            &state,
+            CharacterExportOptions::from_game_state_skills(),
+        )
+        .expect("state with inventory item should export");
+
+        assert!(!file.item_lists().item_lists.is_empty());
+        assert_eq!(file.item_lists().item_lists[0].parent_item_count, 1);
+
+        let first_list = file.item_lists().item_lists[0].marker_offset;
+        assert_eq!(
+            &file.raw_bytes()[first_list + 4..first_list + 6],
+            SaveSectionMarker::ItemList.raw_bytes()
+        );
+        let item_offset = first_list + 4;
+        assert_eq!(
+            read_bits(file.raw_bytes(), item_offset * 8 + 58, 3),
+            Some(0)
+        );
+        assert_eq!(
+            read_bits(file.raw_bytes(), item_offset * 8 + 61, 4),
+            Some(0)
+        );
+        assert_eq!(
+            read_bits(file.raw_bytes(), item_offset * 8 + 65, 4),
+            Some(2)
+        );
+        assert_eq!(
+            read_bits(file.raw_bytes(), item_offset * 8 + 69, 4),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn exports_local_equipped_items_into_player_item_list() {
+        let mut state = build_export_state();
+        state.items.insert(
+            0x2000,
+            Item::from_owned_packet(
+                0x2000,
+                0x06,
+                0x01,
+                0,
+                0x1000,
+                equipped_item_bitstream("qui", 3),
+            ),
+        );
+
+        let file = CharacterFile::export_legacy_from_game_state(
+            &state,
+            CharacterExportOptions::from_game_state_skills(),
+        )
+        .expect("state with equipped item should export");
+
+        assert!(!file.item_lists().item_lists.is_empty());
+        assert_eq!(file.item_lists().item_lists[0].parent_item_count, 1);
+
+        let first_list = file.item_lists().item_lists[0].marker_offset;
+        let item_offset = first_list + 4;
+        assert_eq!(
+            read_bits(file.raw_bytes(), item_offset * 8 + 58, 3),
+            Some(1)
+        );
+        assert_eq!(
+            read_bits(file.raw_bytes(), item_offset * 8 + 61, 4),
+            Some(3)
+        );
+        assert_eq!(
+            read_bits(file.raw_bytes(), item_offset * 8 + 65, 4),
+            Some(0)
+        );
+        assert_eq!(
+            read_bits(file.raw_bytes(), item_offset * 8 + 69, 4),
+            Some(0)
+        );
     }
 
     fn build_save(version: u32, name: &str, len: usize) -> Vec<u8> {
@@ -1657,6 +2186,10 @@ mod tests {
             amount: 2048,
         }));
         assert!(state.update(ServerMessage::SetAttributeU16 {
+            attribute: UnitStat::ManaMax as u8,
+            amount: 4096,
+        }));
+        assert!(state.update(ServerMessage::SetAttributeU16 {
             attribute: UnitStat::Level as u8,
             amount: 42,
         }));
@@ -1697,6 +2230,58 @@ mod tests {
             }
         }
         bytes
+    }
+
+    fn inventory_item_bitstream(code: &str, x: u8, y: u8, container: u8) -> Vec<u8> {
+        let mut writer = TestBitWriter::default();
+        writer.write_bits(ItemFlags::IDENTIFIED, 32);
+        writer.write_bits(0x60, 8);
+        writer.write_bits(0, 2);
+        writer.write_bits(ItemDestination::Cursor.packet_value() as u32, 3);
+        writer.write_bits(0, 4);
+        writer.write_bits(x as u32, 4);
+        writer.write_bits(y as u32, 3);
+        writer.write_bits(container as u32, 4);
+        write_item_code(&mut writer, code);
+        writer.write_bits(0, 3);
+        writer.write_bits(12, 7);
+        writer.write_bits(2, 4);
+        writer.write_bits(0, 1);
+        writer.write_bits(0, 1);
+        writer.write_bits(0, 1);
+        writer.write_bits(0x1ff, 9);
+        writer.finish()
+    }
+
+    fn equipped_item_bitstream(code: &str, equipment_location: u8) -> Vec<u8> {
+        let mut writer = TestBitWriter::default();
+        writer.write_bits(ItemFlags::IDENTIFIED | ItemFlags::EQUIPPED, 32);
+        writer.write_bits(0x60, 8);
+        writer.write_bits(0, 2);
+        writer.write_bits(ItemDestination::Equipment.packet_value() as u32, 3);
+        writer.write_bits(equipment_location as u32, 4);
+        writer.write_bits(0, 4);
+        writer.write_bits(0, 3);
+        writer.write_bits(ItemContainer::Equipment.packet_value() as u32, 4);
+        write_item_code(&mut writer, code);
+        writer.write_bits(0, 3);
+        writer.write_bits(12, 7);
+        writer.write_bits(2, 4);
+        writer.write_bits(0, 1);
+        writer.write_bits(0, 1);
+        writer.write_bits(0, 1);
+        writer.write_bits(0x1ff, 9);
+        writer.finish()
+    }
+
+    fn write_item_code(writer: &mut TestBitWriter, code: &str) {
+        let mut raw = [b' '; 4];
+        let bytes = code.as_bytes();
+        let len = bytes.len().min(4);
+        raw[..len].copy_from_slice(&bytes[..len]);
+        for byte in raw {
+            writer.write_bits(byte as u32, 8);
+        }
     }
 
     fn encode_character_stats(stats: &[(CharacterStat, u32)]) -> Vec<u8> {
