@@ -53,5 +53,6 @@ pub use crate::core::party::PartyAction;
 pub use crate::core::protocol::server_message::{ServerMessageParseError, SkillDescription};
 pub use crate::core::protocol::ClientMessage;
 pub use crate::core::protocol::ServerMessage;
+pub use crate::core::quest::{PlayerQuestLog, QuestLogEntry, QuestLogEntryState};
 pub use crate::core::unit_stat::UnitStat;
 pub use crate::core::version::{detect_edition, CharacterStatus, GameEdition, SaveVersion};

@@ -58,6 +58,9 @@ src/core/
     edition-specific inventory/stash/cube profiles and save item-placement
     enums
 
+  quest.rs
+    packet-derived local-player quest-log state and named quest-log slots
+
   character_file.rs
     conservative .d2s header parser, checksum validator, stats/skills parser,
     item-related section-header scanner, D2R v105 header handling,
@@ -217,6 +220,7 @@ subset:
 0x4C,
 0x4D,
 0x51,
+0x52,
 0x53,
 0x59,
 0x5A,
@@ -245,11 +249,12 @@ subset:
 These IDs cover game/load lifecycle packets, map reveal/hide, level warps,
 object removal/handshake, movement/state basics, local HP/MP/stamina bitstreams,
 simple stat and experience
-updates, world objects, darkness/event envelopes, player assignment/join/left
-and player-map updates, NPC movement/state/heal, trade/pong/status envelopes,
-fixed item-state flag updates, state-neutral relator envelopes, variable-length
-monster assignment, variable item stat-update envelopes, world/owned item action
-envelopes, state ending, and compression/termination signals.
+updates, world objects, local-player quest-log snapshots, darkness/event
+envelopes, player assignment/join/left and player-map updates, NPC
+movement/state/heal, trade/pong/status envelopes, fixed item-state flag updates,
+state-neutral relator envelopes, variable-length monster assignment, variable
+item stat-update envelopes, world/owned item action envelopes, state ending, and
+compression/termination signals.
 
 Item action packet envelopes are parsed by `ServerMessage`, but the item
 bitstream itself is owned by `core::object::item`. That module currently decodes

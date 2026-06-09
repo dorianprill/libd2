@@ -10,6 +10,7 @@ use crate::core::network::d2gs::D2GSPacket;
 use crate::core::object::item::{Item, ItemStateFlags};
 use crate::core::object::WorldObject;
 use crate::core::protocol::server_message::{ServerMessageParseError, SkillDescription};
+use crate::core::quest::PlayerQuestLog;
 use crate::core::unit_stat::UnitStat;
 use crate::core::update::Update;
 use crate::ServerMessage;
@@ -229,6 +230,7 @@ pub struct GameState {
     pub(crate) locale: Locale,
     pub(crate) map: GameMapState,
     pub(crate) local_player_id: Option<u32>,
+    pub(crate) player_quest_log: Option<PlayerQuestLog>,
     pub(crate) is_expansion: bool,
     pub(crate) is_ladder: bool,
     pub(crate) is_hardcore: bool,
@@ -252,6 +254,7 @@ impl GameState {
             locale,
             map: GameMapState::default(),
             local_player_id: None,
+            player_quest_log: None,
             is_expansion: false,
             is_ladder: false,
             is_hardcore: false,
@@ -337,6 +340,10 @@ impl GameState {
 
     pub fn local_player_id(&self) -> Option<u32> {
         self.local_player_id.map(|id| self.resolve_player_id(id))
+    }
+
+    pub fn player_quest_log(&self) -> Option<&PlayerQuestLog> {
+        self.player_quest_log.as_ref()
     }
 
     pub fn difficulty(&self) -> Difficulty {
@@ -836,6 +843,7 @@ impl GameState {
         self.item_stat_updates.clear();
         self.map = GameMapState::default();
         self.local_player_id = None;
+        self.player_quest_log = None;
     }
 }
 
@@ -1092,6 +1100,10 @@ impl Update for GameState {
                         interaction,
                     ),
                 );
+                true
+            }
+            ServerMessage::PlayerQuestLogInfo { quest_bits } => {
+                self.player_quest_log = Some(PlayerQuestLog::new(quest_bits));
                 true
             }
             ServerMessage::NpcMove {
@@ -1418,6 +1430,7 @@ impl<'a> StatusBitReader<'a> {
 mod tests {
     use crate::core::entity::Entity;
     use crate::core::network::d2gs::D2GSPacket;
+    use crate::core::quest::{QuestLogEntry, QuestLogEntryState};
     use crate::core::unit_stat::UnitStat;
     use crate::core::update::Update;
     use crate::{
@@ -2443,6 +2456,68 @@ mod tests {
         assert_eq!(player.stat(UnitStat::Experience as u16), Some(1000));
     }
 
+    #[test]
+    fn player_quest_log_tracks_mandatory_and_optional_act_one_progress() {
+        let mut state = GameState::default();
+
+        assert!(state.update(ServerMessage::PlayerQuestLogInfo {
+            quest_bits: quest_log(&[
+                (QuestLogEntry::ActIIntroduction, 1),
+                (QuestLogEntry::DenOfEvil, completed_quest()),
+                (QuestLogEntry::TheSearchForCain, completed_quest()),
+                (QuestLogEntry::SistersToTheSlaughter, completed_quest()),
+                (QuestLogEntry::TravelToActII, 1),
+                (QuestLogEntry::ActIIIntroduction, 1),
+            ]),
+        }));
+
+        let quest_log = state.player_quest_log().expect("quest log should exist");
+        assert!(quest_log.entry(QuestLogEntry::DenOfEvil).is_completed());
+        assert!(quest_log
+            .entry(QuestLogEntry::SistersToTheSlaughter)
+            .is_completed());
+        assert!(quest_log.entry(QuestLogEntry::TravelToActII).is_set());
+        assert!(!quest_log
+            .entry(QuestLogEntry::TheForgottenTower)
+            .is_completed());
+    }
+
+    #[test]
+    fn player_quest_log_tracks_late_game_dependencies_separately_from_optional_quests() {
+        let mut state = GameState::default();
+
+        assert!(state.update(ServerMessage::PlayerQuestLogInfo {
+            quest_bits: quest_log(&[
+                (QuestLogEntry::TravelToActV, 1),
+                (QuestLogEntry::PostTerrorsEndCain, 1),
+                (QuestLogEntry::SiegeOnHarrogath, completed_quest()),
+                (QuestLogEntry::RescueOnMountArreat, completed_quest()),
+                (QuestLogEntry::RiteOfPassage, completed_quest()),
+                (QuestLogEntry::EveOfDestruction, completed_quest()),
+            ]),
+        }));
+
+        let quest_log = state.player_quest_log().expect("quest log should exist");
+        assert!(quest_log.entry(QuestLogEntry::TravelToActV).is_set());
+        assert!(quest_log.entry(QuestLogEntry::RiteOfPassage).is_completed());
+        assert!(quest_log
+            .entry(QuestLogEntry::EveOfDestruction)
+            .is_completed());
+        assert!(!quest_log.entry(QuestLogEntry::PrisonOfIce).is_completed());
+    }
+
+    #[test]
+    fn game_loading_clears_player_quest_log() {
+        let mut state = GameState::default();
+        assert!(state.update(ServerMessage::PlayerQuestLogInfo {
+            quest_bits: quest_log(&[(QuestLogEntry::TheSummoner, completed_quest())]),
+        }));
+        assert!(state.player_quest_log().is_some());
+
+        assert!(state.update(ServerMessage::GameLoading));
+        assert!(state.player_quest_log().is_none());
+    }
+
     fn mark_local(state: &mut GameState, unit_id: u32) {
         assert!(state.update(ServerMessage::GameHandshake {
             unit_type: 0,
@@ -2456,6 +2531,18 @@ mod tests {
         let len = name.len().min(bytes.len());
         bytes[..len].copy_from_slice(&name[..len]);
         bytes
+    }
+
+    fn completed_quest() -> u8 {
+        QuestLogEntryState::COMPLETED_BIT | QuestLogEntryState::REQUIREMENT_COMPLETED_BIT
+    }
+
+    fn quest_log(entries: &[(QuestLogEntry, u8)]) -> [u8; 41] {
+        let mut quest_bits = [0u8; 41];
+        for (entry, value) in entries {
+            quest_bits[entry.index()] = *value;
+        }
+        quest_bits
     }
 
     fn item_bitstream(

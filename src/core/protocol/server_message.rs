@@ -423,7 +423,7 @@ pub enum ServerMessage {
     } = 0x51,
 
     PlayerQuestLogInfo {
-        unknown: [u8; 41],
+        quest_bits: [u8; 41],
     } = 0x52,
 
     /// FIXME conflicting info mephi vs bh
@@ -1415,6 +1415,12 @@ impl ServerMessage {
                     y: cursor.u16_le(),
                     state: cursor.u8(),
                     interaction: cursor.u8(),
+                })
+            }
+            0x52 => {
+                let mut cursor = PacketCursor::new(input, 42)?;
+                Ok(Self::PlayerQuestLogInfo {
+                    quest_bits: cursor.array(),
                 })
             }
             0x53 => {
@@ -2496,6 +2502,19 @@ mod tests {
                 unit_id: 0x70B6_38C3,
                 action_type: 1,
                 quest_bits,
+            }
+        );
+
+        let mut quest_log = vec![0x52];
+        quest_log.extend(0..41);
+        let mut quest_log_bits = [0u8; 41];
+        for (index, byte) in quest_log_bits.iter_mut().enumerate() {
+            *byte = index as u8;
+        }
+        assert_eq!(
+            ServerMessage::parse(&quest_log).expect("player quest log should parse"),
+            ServerMessage::PlayerQuestLogInfo {
+                quest_bits: quest_log_bits,
             }
         );
     }

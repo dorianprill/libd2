@@ -1,6 +1,6 @@
 # libd2r Report
 
-Last updated: 2026-06-06
+Last updated: 2026-06-09
 
 ## Current Status
 
@@ -32,7 +32,7 @@ The crate now resolves dependencies and passes:
 cargo test
 ```
 
-The current suite has 113 unit tests.
+The current suite has 128 unit tests.
 
 ## Work Completed
 
@@ -235,6 +235,14 @@ The current suite has 113 unit tests.
   movement coordinates, and raw movement verification bytes.
 - Added `PlayerVitals` and `PlayerMovement` as public APIs for overlay
   consumers.
+- Added parsing for D2GS `0x52 PlayerQuestLog` and a typed
+  `PlayerQuestLog`/`QuestLogEntry` model for the current difficulty's local
+  quest-log snapshot.
+- Wired `0x52` into `GameState`, preserving named quest-log slots for
+  mandatory act progression markers, optional quests, and act-travel flags.
+- Added parser and state-transition tests for `0x52`, including representative
+  Act I and Act V progressions where mandatory/dependent quests advance while
+  optional quests remain incomplete.
 - Wired known-object state updates from `0x0E` into `GameState`, including
   portal flags, targetability, and the raw object state value.
 - Fixed `0x3E` item-stat update handling for LoD 1.14d's padded 34-byte packet
