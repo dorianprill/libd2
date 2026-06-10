@@ -6,14 +6,14 @@ use crate::ServerMessage;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Missile {
     id: u32,
-    class_id: Option<u16>,
-    location: Coordinate,
-    target: Option<Coordinate>,
-    current_frame: Option<u16>,
-    owner_type: Option<u8>,
-    owner_id: Option<u32>,
-    skill_level: Option<u8>,
-    pierce_level: Option<u8>,
+    pub class_id: Option<u16>,
+    pub location: Coordinate,
+    pub target: Option<Coordinate>,
+    pub current_frame: Option<u16>,
+    pub owner_type: Option<u8>,
+    pub owner_id: Option<u32>,
+    pub skill_level: Option<u8>,
+    pub pierce_level: Option<u8>,
 }
 
 impl Missile {
@@ -95,20 +95,20 @@ impl Missile {
 impl Update for Missile {
     fn update(&mut self, _msg: ServerMessage) -> bool {
         // TODO match packets here e.g. MercUpdate etc.
-        return true;
+        true
     }
 }
 
 impl Entity for Missile {
     fn initialized(&self) -> bool {
-        return true;
+        true
     }
 
     fn id(&self) -> u32 {
-        return self.id;
+        self.id
     }
 
     fn location(&self) -> Coordinate {
-        return self.location;
+        self.location
     }
 }

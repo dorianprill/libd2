@@ -6,6 +6,7 @@ use crate::core::entity::mercenary::Mercenary;
 use crate::core::entity::missile::Missile;
 use crate::core::entity::npc::Npc;
 use crate::core::entity::player::{Player, PlayerMovement, PlayerVitals};
+use crate::core::entity::Entity;
 use crate::core::network::d2gs::D2GSPacket;
 use crate::core::object::item::{Item, ItemStateFlags};
 use crate::core::object::WorldObject;
@@ -76,6 +77,7 @@ pub struct MapTile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default)]
 pub struct GameMapState {
     pub act: Option<u8>,
     pub map_id: Option<u32>,
@@ -84,17 +86,6 @@ pub struct GameMapState {
     pub revealed_tiles: HashSet<MapTile>,
 }
 
-impl Default for GameMapState {
-    fn default() -> Self {
-        Self {
-            act: None,
-            map_id: None,
-            area_id: None,
-            automap: None,
-            revealed_tiles: HashSet::new(),
-        }
-    }
-}
 
 /// Raw server item-stat update captured from D2GS packet `0x3E`.
 ///
@@ -563,41 +554,20 @@ impl GameState {
         }
     }
 
-    fn upsert_missile(
-        &mut self,
-        missile_id: u32,
-        missile_class: u16,
-        location: Coordinate,
-        target: Coordinate,
-        current_frame: u16,
-        owner_type: u8,
-        owner_id: u32,
-        skill_level: u8,
-        pierce_level: u8,
-    ) {
+    fn upsert_missile(&mut self, missile: Missile) {
         self.missiles
-            .entry(missile_id)
-            .and_modify(|missile| {
-                missile.set_class_id(missile_class);
-                missile.set_location(location);
-                missile.set_target(target);
-                missile.set_current_frame(current_frame);
-                missile.set_owner_type(owner_type);
-                missile.set_owner_id(owner_id);
-                missile.set_skill_level(skill_level);
-                missile.set_pierce_level(pierce_level);
+            .entry(missile.id())
+            .and_modify(|existing| {
+                existing.class_id = missile.class_id;
+                existing.location = missile.location;
+                existing.target = missile.target;
+                existing.current_frame = missile.current_frame;
+                existing.owner_type = missile.owner_type;
+                existing.owner_id = missile.owner_id;
+                existing.skill_level = missile.skill_level;
+                existing.pierce_level = missile.pierce_level;
             })
-            .or_insert_with(|| {
-                let mut missile = Missile::new(missile_id, location);
-                missile.set_class_id(missile_class);
-                missile.set_target(target);
-                missile.set_current_frame(current_frame);
-                missile.set_owner_type(owner_type);
-                missile.set_owner_id(owner_id);
-                missile.set_skill_level(skill_level);
-                missile.set_pierce_level(pierce_level);
-                missile
-            });
+            .or_insert(missile);
     }
 
     fn upsert_mercenary(
@@ -627,11 +597,10 @@ impl GameState {
     fn current_mercenary_mut(&mut self) -> Option<&mut Mercenary> {
         if let Some(local_player_id) = self.local_player_id {
             let local_player_id = self.resolve_player_id(local_player_id);
-            if let Some(player) = self.players.get(&local_player_id) {
-                if player.has_mercenary() {
+            if let Some(player) = self.players.get(&local_player_id)
+                && player.has_mercenary() {
                     return self.mercenaries.get_mut(&player.mercenary_id());
                 }
-            }
         }
 
         if self.mercenaries.len() == 1 {
@@ -1052,17 +1021,18 @@ impl Update for GameState {
                 skill_level,
                 pierce_level,
             } => {
-                self.upsert_missile(
+                let mut missile = Missile::new(
                     missile_id,
-                    missile_class,
                     Coordinate::new(missile_x as u16, missile_y as u16),
-                    Coordinate::new(target_x as u16, target_y as u16),
-                    current_frame,
-                    owner_type,
-                    owner_id,
-                    skill_level,
-                    pierce_level,
                 );
+                missile.class_id = Some(missile_class);
+                missile.target = Some(Coordinate::new(target_x as u16, target_y as u16));
+                missile.current_frame = Some(current_frame);
+                missile.owner_type = Some(owner_type);
+                missile.owner_id = Some(owner_id);
+                missile.skill_level = Some(skill_level);
+                missile.pierce_level = Some(pierce_level);
+                self.upsert_missile(missile);
                 true
             }
             ServerMessage::PlayerCorpseAssign {

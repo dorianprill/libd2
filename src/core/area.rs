@@ -315,7 +315,7 @@ impl TryFrom<u16> for Area {
 }
 
 #[allow(dead_code)]
-const ACT1_AREAS: &'static [&'static str] = &[
+const ACT1_AREAS: &[&str] = &[
     "Rogue Encampment",
     "Blood Moor",
     "Cold Plains",
@@ -358,7 +358,7 @@ const ACT1_AREAS: &'static [&'static str] = &[
 ];
 
 #[allow(dead_code)]
-const ACT2_AREAS: &'static [&'static str] = &[
+const ACT2_AREAS: &[&str] = &[
     "Lut Gholein",
     "Rocky Waste",
     "Dry Hills",
@@ -397,7 +397,7 @@ const ACT2_AREAS: &'static [&'static str] = &[
 ];
 
 #[allow(dead_code)]
-const ACT3_AREAS: &'static [&'static str] = &[
+const ACT3_AREAS: &[&str] = &[
     "Kurast Docks",
     "Spider Forest",
     "Great Marsh",
@@ -429,7 +429,7 @@ const ACT3_AREAS: &'static [&'static str] = &[
 ];
 
 #[allow(dead_code)]
-const ACT4_AREAS: &'static [&'static str] = &[
+const ACT4_AREAS: &[&str] = &[
     "The Pandemonium Fortress",
     "Outer Steppes",
     "Plains Of Despair",
@@ -439,7 +439,7 @@ const ACT4_AREAS: &'static [&'static str] = &[
 ];
 
 #[allow(dead_code)]
-const ACT5_AREAS: &'static [&'static str] = &[
+const ACT5_AREAS: &[&str] = &[
     "Harrogath",
     "The Bloody Foothills",
     "Frigid Highlands",

@@ -10,7 +10,7 @@ pub enum PacketDirection {
 
 impl PartialEq for PacketDirection {
     fn eq(&self, other: &PacketDirection) -> bool {
-        self == other
+        matches!((self, other), (Self::Receive, Self::Receive) | (Self::Send, Self::Send))
     }
 }
 
