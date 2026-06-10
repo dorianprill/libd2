@@ -424,13 +424,12 @@ impl Connection {
                     on_event,
                 );
             }
-        } else if let Some(TransportSlice::Udp(udp)) = &packet.transport {
-            if classify_transport(udp.source_port(), udp.destination_port())
+        } else if let Some(TransportSlice::Udp(udp)) = &packet.transport
+            && classify_transport(udp.source_port(), udp.destination_port())
                 == CapturedTransport::LegacyD2gsServerToClient
             {
                 self.read_d2gs_payload(udp.payload(), game_state, on_event);
             }
-        }
     }
 
     /// Processes a legacy D2GS payload without using live packet capture.

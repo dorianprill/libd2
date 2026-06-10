@@ -1232,13 +1232,12 @@ fn encode_legacy_item(item: &Item, socketed_children: u8) -> Option<Vec<u8>> {
             | crate::core::object::item::ItemCategory::Weapon
             | crate::core::object::item::ItemCategory::Weapon2
             | crate::core::object::item::ItemCategory::Shield
-    ) {
-        if let Some(durability) = packet.durability {
+    )
+        && let Some(durability) = packet.durability {
             writer.write_bits(durability.max as u32, 8);
             writer.write_bits(durability.current as u32, 8);
             writer.write_bool(false);
         }
-    }
 
     if packet.flags.is_socketed() {
         writer.write_bits(packet.sockets.unwrap_or_default() as u32, 4);

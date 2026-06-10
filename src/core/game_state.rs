@@ -617,11 +617,10 @@ impl GameState {
     fn current_mercenary_mut(&mut self) -> Option<&mut Mercenary> {
         if let Some(local_player_id) = self.local_player_id {
             let local_player_id = self.resolve_player_id(local_player_id);
-            if let Some(player) = self.players.get(&local_player_id) {
-                if player.has_mercenary() {
+            if let Some(player) = self.players.get(&local_player_id)
+                && player.has_mercenary() {
                     return self.mercenaries.get_mut(&player.mercenary_id());
                 }
-            }
         }
 
         if self.mercenaries.len() == 1 {
