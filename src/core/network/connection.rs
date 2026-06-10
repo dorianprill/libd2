@@ -294,12 +294,35 @@ impl Connection {
             return;
         }
 
-        let mut socket = self.create_raw_socket();
-        let mut buf = [0u8; 2048];
+        let mut socket = match self.create_raw_socket() {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("---------------------------------------------------------");
+                eprintln!("ERROR: Failed to initialize network capture.");
+                eprintln!("Reason: {}", e);
+                #[cfg(target_os = "windows")]
+                {
+                    if e.kind() == std::io::ErrorKind::PermissionDenied {
+                        eprintln!("\nHELP: Driverless sniffing on Windows requires Administrator privileges.");
+                        eprintln!("Please run your terminal or application as an Administrator.");
+                    }
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    if e.kind() == std::io::ErrorKind::PermissionDenied {
+                        eprintln!("\nHELP: Raw socket access on Linux requires CAP_NET_RAW or root privileges.");
+                        eprintln!("Try running with 'sudo' or set capabilities: 'sudo setcap cap_net_raw,cap_net_admin=eip <binary>'");
+                    }
+                }
+                eprintln!("---------------------------------------------------------");
+                return;
+            }
+        };
+
+        let mut buf = [0u8; 65535]; // Using max IP packet size to avoid truncation
 
         loop {
             match socket.read(&mut buf) {
-
                 Ok(n) => {
                     self.handle_raw_packet(&buf[..n], game_state, &mut on_event);
                 }
@@ -311,15 +334,15 @@ impl Connection {
         }
     }
 
-    fn create_raw_socket(&self) -> Socket {
+    fn create_raw_socket(&self) -> Result<Socket, std::io::Error> {
         #[cfg(target_os = "windows")]
         {
             // Protocol 0 is IPPROTO_IP
-            let socket = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::from(0))).expect("Failed to create Windows raw socket");
+            let socket = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::from(0)))?;
             
             // On Windows we must bind to a local interface IP to use SIO_RCVALL
             if let Some(ip) = self.interface.ipv4.first() {
-                socket.bind(&std::net::SocketAddrV4::new(ip.addr(), 0).into()).expect("Failed to bind raw socket");
+                socket.bind(&std::net::SocketAddrV4::new(ip.addr(), 0).into())?;
             }
 
             let rcval_on: u32 = 1; // SIO_RCVALL_ON
@@ -337,21 +360,21 @@ impl Connection {
                     None,
                 );
                 if r != 0 {
-                    eprintln!("Warning: WSAIoctl SIO_RCVALL failed ({}). Ensure running as Admin.", std::io::Error::last_os_error());
+                    return Err(std::io::Error::last_os_error());
                 }
             }
-            socket
+            Ok(socket)
         }
 
         #[cfg(target_os = "linux")]
         {
             // ETH_P_ALL = 0x0003
-            Socket::new(Domain::PACKET, Type::RAW, Some(Protocol::from(0x0003))).expect("Failed to create Linux raw socket")
+            Ok(Socket::new(Domain::PACKET, Type::RAW, Some(Protocol::from(0x0003)))?)
         }
 
         #[cfg(not(any(target_os = "windows", target_os = "linux")))]
         {
-            panic!("Unsupported platform for driverless raw sockets. Implementation for BPF/macOS needed.");
+            Err(std::io::Error::new(std::io::ErrorKind::Other, "Unsupported platform for driverless raw sockets. Implementation for BPF/macOS needed."))
         }
     }
 

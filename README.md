@@ -31,7 +31,8 @@ objects, items, static-data names, and generated-map collision when available.
 This list describes the current code, not the final project goal.
 
 1. Network and protocol support
-   - [x] Passive packet capture through `Client`/`Connection` using `pnet`; legacy Classic/LoD plaintext D2GS server traffic from source port `4000` is routed to the D2GS reader. Client-to-server packets with destination port `4000` are ignored for now because they use the separate client packet space. Capture opens the datalink channel without promiscuous mode because local client/server traffic is sufficient and promiscuous membership can fail on some wireless interfaces.
+   - [x] Passive packet capture through `Client`/`Connection` using a pure-Rust stack (`netdev`, `etherparse`, `socket2`). On Windows, this utilizes `SIO_RCVALL` for **driverless sniffing** (no Npcap/WinPcap required, but Administrator privileges are necessary). On Linux, it uses raw `AF_PACKET` sockets.
+   - [x] Legacy Classic/LoD plaintext D2GS server traffic from source port `4000` is routed to the D2GS reader. Client-to-server packets with destination port `4000` are ignored for now because they use the separate client packet space.
    - [x] Live server-to-client TCP payloads are reconstructed in sequence order before D2GS parsing. Duplicate retransmissions are ignored, overlapping retransmissions are trimmed, out-of-order segments are buffered, and bounded gap resets are reported as transport warnings.
    - [x] D2R/modern Battle.net traffic on port `1119` is classified as encrypted/unknown transport and is no longer fed into the legacy D2GS parser.
    - [x] Plain D2GS TCP payloads are split into individual `D2GSPacket`s before parsing, including live-observed concatenated map-reveal and `0x9C` item bursts.
@@ -78,12 +79,11 @@ This list describes the current code, not the final project goal.
 
 ## How to Build
 
-Building on windows requires some extra steps, otherwise it should be smooth sailing.  
-At this early stage I haven't created any bindings, but Python/TypeScript would be useful to many people, I guess.
+Building the library is straightforward as it uses a pure-Rust network stack. No external C libraries or drivers (like Npcap) are required for building or basic sniffing.
 
 ### Linux
 
-Tested with Diablo 2 (Legacy) and WINE
+Tested with Diablo 2 (Legacy) and WINE.
 `cargo build --release`
 
 ### Mac Os
@@ -92,9 +92,8 @@ Tested with Diablo 2 (Legacy) and WINE
 
 ### Windows
 
-You will need to install `ncap` or the `WinPcap Developers Pack` as per the [libpnet](https://github.com/libpnet/libpnet) build instructions for Windows (I tested the latter). Then point your user environment variable `LIB` (create if nonexistent) to the folder where to find Packet.lib i.e. `WpdPack/Lib/x64/` from the WinPcap Developers Pack you just downloaded. Then `cargo build --release`
-This will get the project building.  
-Currently, in order to find the internet-connected network interface, it is necessary to disable disconnected-but-enabled interfaces (such as virtual adaperts for VPN).
+`cargo build --release`
+The project builds out of the box without requiring the WinPcap Developers Pack or Npcap installation.
 
 ## Usage
 
@@ -103,8 +102,10 @@ legacy LoD D2GS packets on port `4000`. Put the following code in your `main.rs`
 and run it. Then start Diablo II LoD 1.14, join a game, and let the library keep
 `GameState` updated from parsed packets.
 
+**Note:** On Windows, you must run your application as an **Administrator** to enable driverless packet sniffing.
+
 ```Rust
-use libd2r::Client;
+use libd2::Client;
 
 fn main() {
     let mut client = Client::new();
@@ -116,7 +117,7 @@ For UI tools, run the blocking listener on a worker thread and forward compact
 snapshots or events to the UI thread:
 
 ```Rust
-use libd2r::{Client, ConnectionEvent};
+use libd2::{Client, ConnectionEvent};
 
 fn main() {
     let mut client = Client::new();
@@ -173,6 +174,7 @@ Here are some great resources on the original game, thanks to everyone who has b
 - [client-less C# bot by dkuwahara](https://github.com/dkuwahara/OmegaBot)
 - [a blog post by Eric Carmichael](http://www.ericcarmichael.com/my-diablo-2-botting-phase.html)  
 - [D2BS](https://github.com/noah-/d2bs)
+- [D2NG - Diablo II Next Generation (protocol and game engine research)](https://github.com/d2ng/d2ng)
 - Another good resource is the [diablo 2 protocol js library](https://github.com/MephisTools/diablo2-protocol).
 - https://github.com/blizzhackers/kolbot (Data structures and game mechanics)
 - https://github.com/blizzhackers/kolbot-SoloPlay (Solo play strategy  implementation)
