@@ -1,0 +1,692 @@
+    Checking digest v0.10.7
+    Checking libd2r v0.1.0 (C:\Users\Dorian\source\d2\libd2)
+warning: constants have by default a `'static` lifetime
+   --> src\core\area.rs:318:20
+    |
+318 | const ACT1_AREAS: &'static [&'static str] = &[
+    |                   -^^^^^^^--------------- help: consider removing `'static`: `&[&'static str]`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#redundant_static_lifetimes
+    = note: `#[warn(clippy::redundant_static_lifetimes)]` on by default
+
+warning: constants have by default a `'static` lifetime
+   --> src\core\area.rs:318:30
+    |
+318 | const ACT1_AREAS: &'static [&'static str] = &[
+    |                             -^^^^^^^---- help: consider removing `'static`: `&str`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#redundant_static_lifetimes
+
+warning: constants have by default a `'static` lifetime
+   --> src\core\area.rs:361:20
+    |
+361 | const ACT2_AREAS: &'static [&'static str] = &[
+    |                   -^^^^^^^--------------- help: consider removing `'static`: `&[&'static str]`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#redundant_static_lifetimes
+
+warning: constants have by default a `'static` lifetime
+   --> src\core\area.rs:361:30
+    |
+361 | const ACT2_AREAS: &'static [&'static str] = &[
+    |                             -^^^^^^^---- help: consider removing `'static`: `&str`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#redundant_static_lifetimes
+
+warning: constants have by default a `'static` lifetime
+   --> src\core\area.rs:400:20
+    |
+400 | const ACT3_AREAS: &'static [&'static str] = &[
+    |                   -^^^^^^^--------------- help: consider removing `'static`: `&[&'static str]`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#redundant_static_lifetimes
+
+warning: constants have by default a `'static` lifetime
+   --> src\core\area.rs:400:30
+    |
+400 | const ACT3_AREAS: &'static [&'static str] = &[
+    |                             -^^^^^^^---- help: consider removing `'static`: `&str`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#redundant_static_lifetimes
+
+warning: constants have by default a `'static` lifetime
+   --> src\core\area.rs:432:20
+    |
+432 | const ACT4_AREAS: &'static [&'static str] = &[
+    |                   -^^^^^^^--------------- help: consider removing `'static`: `&[&'static str]`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#redundant_static_lifetimes
+
+warning: constants have by default a `'static` lifetime
+   --> src\core\area.rs:432:30
+    |
+432 | const ACT4_AREAS: &'static [&'static str] = &[
+    |                             -^^^^^^^---- help: consider removing `'static`: `&str`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#redundant_static_lifetimes
+
+warning: constants have by default a `'static` lifetime
+   --> src\core\area.rs:442:20
+    |
+442 | const ACT5_AREAS: &'static [&'static str] = &[
+    |                   -^^^^^^^--------------- help: consider removing `'static`: `&[&'static str]`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#redundant_static_lifetimes
+
+warning: constants have by default a `'static` lifetime
+   --> src\core\area.rs:442:30
+    |
+442 | const ACT5_AREAS: &'static [&'static str] = &[
+    |                             -^^^^^^^---- help: consider removing `'static`: `&str`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#redundant_static_lifetimes
+
+warning: using tabs in doc comments is not recommended
+   --> src\core\protocol\server_message.rs:399:8
+    |
+399 |     ///    "PacketId" : "0x50",
+    |        ^^^^ help: consider using four spaces per tab
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#tabs_in_doc_comments
+    = note: `#[warn(clippy::tabs_in_doc_comments)]` on by default
+
+warning: using tabs in doc comments is not recommended
+   --> src\core\protocol\server_message.rs:400:8
+    |
+400 |     ///    "Description" : "",
+    |        ^^^^ help: consider using four spaces per tab
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#tabs_in_doc_comments
+
+warning: using tabs in doc comments is not recommended
+   --> src\core\protocol\server_message.rs:401:8
+    |
+401 |     ///    "Size" : 15,
+    |        ^^^^ help: consider using four spaces per tab
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#tabs_in_doc_comments
+
+warning: using tabs in doc comments is not recommended
+   --> src\core\protocol\server_message.rs:402:8
+    |
+402 |     ///    "Structure" : [
+    |        ^^^^ help: consider using four spaces per tab
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#tabs_in_doc_comments
+
+warning: using tabs in doc comments is not recommended
+   --> src\core\protocol\server_message.rs:403:8
+    |
+403 |     ///        { "BYTE" : "PacketId" },
+    |        ^^^^^^^^ help: consider using four spaces per tab
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#tabs_in_doc_comments
+
+warning: using tabs in doc comments is not recommended
+   --> src\core\protocol\server_message.rs:404:8
+    |
+404 |     ///        { "short" : "nMessageType" },
+    |        ^^^^^^^^ help: consider using four spaces per tab
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#tabs_in_doc_comments
+
+warning: using tabs in doc comments is not recommended
+   --> src\core\protocol\server_message.rs:405:8
+    |
+405 |     ///        { "short" : "nArg1" },
+    |        ^^^^^^^^ help: consider using four spaces per tab
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#tabs_in_doc_comments
+
+warning: using tabs in doc comments is not recommended
+   --> src\core\protocol\server_message.rs:406:8
+    |
+406 |     ///        { "short" : "nArg2" },
+    |        ^^^^^^^^ help: consider using four spaces per tab
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#tabs_in_doc_comments
+
+warning: using tabs in doc comments is not recommended
+   --> src\core\protocol\server_message.rs:407:8
+    |
+407 |     ///        { "short" : "nArg3" },
+    |        ^^^^^^^^ help: consider using four spaces per tab
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#tabs_in_doc_comments
+
+warning: using tabs in doc comments is not recommended
+   --> src\core\protocol\server_message.rs:408:8
+    |
+408 |     ///        { "short" : "nArg4" },
+    |        ^^^^^^^^ help: consider using four spaces per tab
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#tabs_in_doc_comments
+
+warning: using tabs in doc comments is not recommended
+   --> src\core\protocol\server_message.rs:409:8
+    |
+409 |     ///        { "short" : "nArg5" },
+    |        ^^^^^^^^ help: consider using four spaces per tab
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#tabs_in_doc_comments
+
+warning: using tabs in doc comments is not recommended
+   --> src\core\protocol\server_message.rs:410:8
+    |
+410 |     ///        { "short" : "nArg6" }
+    |        ^^^^^^^^ help: consider using four spaces per tab
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#tabs_in_doc_comments
+
+warning: using tabs in doc comments is not recommended
+   --> src\core\protocol\server_message.rs:411:8
+    |
+411 |     ///    ]
+    |        ^^^^ help: consider using four spaces per tab
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#tabs_in_doc_comments
+
+    Checking sha2 v0.10.9
+warning: module has the same name as its containing module
+ --> src\client.rs:1:1
+  |
+1 | pub mod client;
+  | ^^^^^^^^^^^^^^^
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#module_inception
+  = note: `#[warn(clippy::module_inception)]` on by default
+
+warning: this `impl` can be derived
+   --> src\core\character_file.rs:319:1
+    |
+319 | / impl Default for CharacterExportOptions {
+320 | |     fn default() -> Self {
+321 | |         Self { skills: None }
+322 | |     }
+323 | | }
+    | |_^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#derivable_impls
+    = note: `#[warn(clippy::derivable_impls)]` on by default
+help: replace the manual implementation with a derive attribute
+    |
+293 + #[derive(Default)]
+294 | pub struct CharacterExportOptions {
+    |
+
+error: this comparison involving the minimum or maximum element for this type contains a case that is always true or always false
+   --> src\core\data.rs:292:12
+    |
+292 |         if index >= CLASSIC_OFFSET {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: because `CLASSIC_OFFSET` is the minimum value for this type, this comparison is always true
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#absurd_extreme_comparisons
+    = note: `#[deny(clippy::absurd_extreme_comparisons)]` on by default
+
+warning: unneeded `return` statement
+   --> src\core\entity\mercenary.rs:173:9
+    |
+173 |         return true;
+    |         ^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_return
+    = note: `#[warn(clippy::needless_return)]` on by default
+help: remove `return`
+    |
+173 -         return true;
+173 +         true
+    |
+
+warning: unneeded `return` statement
+   --> src\core\entity\mercenary.rs:179:9
+    |
+179 |         return true;
+    |         ^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_return
+help: remove `return`
+    |
+179 -         return true;
+179 +         true
+    |
+
+warning: unneeded `return` statement
+   --> src\core\entity\mercenary.rs:183:9
+    |
+183 |         return self.id;
+    |         ^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_return
+help: remove `return`
+    |
+183 -         return self.id;
+183 +         self.id
+    |
+
+warning: unneeded `return` statement
+   --> src\core\entity\mercenary.rs:187:9
+    |
+187 |         return self.location;
+    |         ^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_return
+help: remove `return`
+    |
+187 -         return self.location;
+187 +         self.location
+    |
+
+warning: unneeded `return` statement
+  --> src\core\entity\missile.rs:98:9
+   |
+98 |         return true;
+   |         ^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_return
+help: remove `return`
+   |
+98 -         return true;
+98 +         true
+   |
+
+warning: unneeded `return` statement
+   --> src\core\entity\missile.rs:104:9
+    |
+104 |         return true;
+    |         ^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_return
+help: remove `return`
+    |
+104 -         return true;
+104 +         true
+    |
+
+warning: unneeded `return` statement
+   --> src\core\entity\missile.rs:108:9
+    |
+108 |         return self.id;
+    |         ^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_return
+help: remove `return`
+    |
+108 -         return self.id;
+108 +         self.id
+    |
+
+warning: unneeded `return` statement
+   --> src\core\entity\missile.rs:112:9
+    |
+112 |         return self.location;
+    |         ^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_return
+help: remove `return`
+    |
+112 -         return self.location;
+112 +         self.location
+    |
+
+warning: unneeded `return` statement
+  --> src\core\entity\npc.rs:68:9
+   |
+68 |         return true;
+   |         ^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_return
+help: remove `return`
+   |
+68 -         return true;
+68 +         true
+   |
+
+warning: unneeded `return` statement
+  --> src\core\entity\npc.rs:74:9
+   |
+74 |         return true;
+   |         ^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_return
+help: remove `return`
+   |
+74 -         return true;
+74 +         true
+   |
+
+warning: unneeded `return` statement
+  --> src\core\entity\npc.rs:78:9
+   |
+78 |         return self.id;
+   |         ^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_return
+help: remove `return`
+   |
+78 -         return self.id;
+78 +         self.id
+   |
+
+warning: unneeded `return` statement
+  --> src\core\entity\npc.rs:82:9
+   |
+82 |         return self.location;
+   |         ^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_return
+help: remove `return`
+   |
+82 -         return self.location;
+82 +         self.location
+   |
+
+warning: unneeded `return` statement
+   --> src\core\entity\player.rs:374:9
+    |
+374 |         return true;
+    |         ^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_return
+help: remove `return`
+    |
+374 -         return true;
+374 +         true
+    |
+
+warning: unneeded `return` statement
+   --> src\core\entity\player.rs:378:9
+    |
+378 |         return self.id;
+    |         ^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_return
+help: remove `return`
+    |
+378 -         return self.id;
+378 +         self.id
+    |
+
+warning: unneeded `return` statement
+   --> src\core\entity\player.rs:382:9
+    |
+382 |         return self.location;
+    |         ^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_return
+help: remove `return`
+    |
+382 -         return self.location;
+382 +         self.location
+    |
+
+warning: unneeded `return` statement
+   --> src\core\entity\player.rs:389:9
+    |
+389 |         return true;
+    |         ^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_return
+help: remove `return`
+    |
+389 -         return true;
+389 +         true
+    |
+
+warning: this `impl` can be derived
+  --> src\core\game_state.rs:87:1
+   |
+87 | / impl Default for GameMapState {
+88 | |     fn default() -> Self {
+89 | |         Self {
+90 | |             act: None,
+...  |
+97 | | }
+   | |_^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#derivable_impls
+help: replace the manual implementation with a derive attribute
+   |
+79 + #[derive(Default)]
+80 | pub struct GameMapState {
+   |
+
+warning: this function has too many arguments (10/7)
+   --> src\core\game_state.rs:566:5
+    |
+566 | /     fn upsert_missile(
+567 | |         &mut self,
+568 | |         missile_id: u32,
+569 | |         missile_class: u16,
+...   |
+576 | |         pierce_level: u8,
+577 | |     ) {
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
+    = note: `#[warn(clippy::too_many_arguments)]` on by default
+
+warning: manual implementation of `.is_multiple_of()`
+   --> src\core\mpq.rs:661:12
+    |
+661 |         || size % 4 != 0
+    |            ^^^^^^^^^^^^^ help: replace with: `!size.is_multiple_of(4)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#manual_is_multiple_of
+    = note: `#[warn(clippy::manual_is_multiple_of)]` on by default
+
+warning: large size difference between variants
+   --> src\core\network\connection.rs:200:1
+    |
+200 | /   pub enum ConnectionEvent {
+201 | | /     ServerMessage {
+202 | | |         packet: D2GSPacket,
+203 | | |         message: ServerMessage,
+204 | | |         applied: bool,
+205 | | |     },
+    | | |_____- the largest variant contains at least 553 bytes
+206 | | /     ParseError {
+207 | | |         packet: D2GSPacket,
+208 | | |         error: ServerMessageParseError,
+209 | | |     },
+    | | |_____- the second-largest variant contains at least 48 bytes
+...   |
+212 | |       },
+213 | |   }
+    | |___^ the entire enum is at least 560 bytes
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#large_enum_variant
+    = note: `#[warn(clippy::large_enum_variant)]` on by default
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+    |
+203 -         message: ServerMessage,
+203 +         message: Box<ServerMessage>,
+    |
+
+warning: you should consider adding a `Default` implementation for `Connection`
+   --> src\core\network\connection.rs:252:5
+    |
+252 | /     pub fn new() -> Self {
+253 | |         Connection {
+254 | |             interface: datalink::interfaces().pop().unwrap(),
+255 | |             initialized: false,
+...   |
+260 | |     }
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#new_without_default
+    = note: `#[warn(clippy::new_without_default)]` on by default
+help: try adding this
+    |
+251 + impl Default for Connection {
+252 +     fn default() -> Self {
+253 +         Self::new()
+254 +     }
+255 + }
+    |
+
+warning: this pattern creates a reference to a reference
+   --> src\core\network\connection.rs:286:24
+    |
+286 |                 .find(|ref ifx| {
+    |                        ^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_borrow
+    = note: `#[warn(clippy::needless_borrow)]` on by default
+help: try
+    |
+286 -                 .find(|ref ifx| {
+286 +                 .find(|ifx| {
+    |
+
+warning: binary comparison to literal `Option::None`
+   --> src\core\network\connection.rs:293:12
+    |
+293 |         if some_if != None {
+    |            ^^^^^^^^^^^^^^^ help: use `Option::is_some()` instead: `some_if.is_some()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#partialeq_to_none
+    = note: `#[warn(clippy::partialeq_to_none)]` on by default
+
+warning: used `unwrap()` on `Some` value
+   --> src\core\network\connection.rs:294:30
+    |
+294 |             self.interface = some_if.unwrap();
+    |                              ^^^^^^^^^^^^^^^^
+    |
+help: remove the `Some` and `unwrap()`
+   --> src\core\network\connection.rs:283:49
+    |
+283 |           let some_if: Option<NetworkInterface> = Some(
+    |  _________________________________________________^
+284 | |             interfaces
+285 | |                 .into_iter()
+286 | |                 .find(|ref ifx| {
+...   |
+290 | |                 .unwrap(),
+291 | |         );
+    | |_________^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#unnecessary_literal_unwrap
+    = note: `#[warn(clippy::unnecessary_literal_unwrap)]` on by default
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+   --> src\core\network\connection.rs:368:57
+    |
+368 |                         fake_ethernet_frame.set_payload(&packet);
+    |                                                         ^^^^^^^ help: change this to: `packet`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_borrow
+
+warning: this function has too many arguments (8/7)
+   --> src\core\network\connection.rs:480:5
+    |
+480 | /     fn handle_transport_protocol<F>(
+481 | |         &mut self,
+482 | |         _interface_name: &str,
+483 | |         source: IpAddr,
+...   |
+489 | |     ) where
+490 | |         F: FnMut(ConnectionEvent, &GameState),
+    | |______________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
+
+warning: you should consider adding a `Default` implementation for `D2GSReader`
+  --> src\core\network\d2gs\d2gs_reader.rs:39:5
+   |
+39 | /     pub fn new() -> Self {
+40 | |         D2GSReader {
+41 | |             packets: VecDeque::with_capacity(128),
+42 | |             packet_stream: Vec::with_capacity(1600),
+...  |
+46 | |     }
+   | |_____^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#new_without_default
+help: try adding this
+   |
+38 + impl Default for D2GSReader {
+39 +     fn default() -> Self {
+40 +         Self::new()
+41 +     }
+42 + }
+   |
+
+warning: method `next` can be confused for the standard trait method `std::iter::Iterator::next`
+  --> src\core\network\d2gs\d2gs_reader.rs:48:5
+   |
+48 | /     pub fn next(&mut self) -> Option<D2GSPacket> {
+49 | |         self.packets.pop_front()
+50 | |     }
+   | |_____^
+   |
+   = help: consider implementing the trait `std::iter::Iterator` or choosing a less ambiguous method name
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#should_implement_trait
+   = note: `#[warn(clippy::should_implement_trait)]` on by default
+
+warning: manual `RangeInclusive::contains` implementation
+   --> src\core\network\d2gs\d2gs_reader.rs:293:20
+    |
+293 |                   if declared_size >= 2
+    |  ____________________^
+294 | |                     && declared_size <= 34
+    | |__________________________________________^ help: use: `(2..=34).contains(&declared_size)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#manual_range_contains
+    = note: `#[warn(clippy::manual_range_contains)]` on by default
+
+warning: function cannot return without recursing
+  --> src\core\network\raw_packet.rs:12:5
+   |
+12 | /     fn eq(&self, other: &PacketDirection) -> bool {
+13 | |         self == other
+14 | |     }
+   | |_____^
+   |
+note: recursive call site
+  --> src\core\network\raw_packet.rs:13:9
+   |
+13 |         self == other
+   |         ^^^^^^^^^^^^^
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#unconditional_recursion
+   = note: `#[warn(clippy::unconditional_recursion)]` on by default
+
+warning: large size difference between variants
+    --> src\core\protocol\server_message.rs:10:1
+     |
+  10 | /   pub enum ServerMessage {
+  11 | |       GameLoading = 0x00,
+  12 | |
+  13 | |       /// eArenaFlags contains information about game settings.
+...    |
+ 229 | | /     GameChat {
+ 230 | | |         chat_kind: u16,
+ 231 | | |         unknown: u16,
+ 232 | | |         unknown2: u32,
+...    | |
+ 235 | | |         message: [u8; 255],   // FIXME handle as &String instead?
+ 236 | | |     } = 0x26,
+     | | |____________- the largest variant contains at least 519 bytes
+...    |
+1019 | | /     WardenRequest {
+1020 | | |         stream_size: u16,
+1021 | | |         bitstream: [u8; 254], // { "BYTE" : "Stream[nStreamSize]" } FIXME maximum packet size
+1022 | | |     } = 0xAE,
+     | | |____________- the second-largest variant contains at least 256 bytes
+...    |
+1066 | |       UnknownFF = 0xFF,
+1067 | |   }
+     | |___^ the entire enum is at least 528 bytes
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#large_enum_variant
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+     |
+ 235 -         message: [u8; 255],   // FIXME handle as &String instead?
+ 235 +         message: Box<[u8; 255]>,   // FIXME handle as &String instead?
+     |
+
+warning: `libd2r` (lib) generated 56 warnings
+error: could not compile `libd2r` (lib) due to 1 previous error; 56 warnings emitted
+warning: build failed, waiting for other jobs to finish...
+warning: `libd2r` (lib test) generated 56 warnings (56 duplicates)
+error: could not compile `libd2r` (lib test) due to 1 previous error; 56 warnings emitted

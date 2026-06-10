@@ -1,29 +1,12 @@
-extern crate pnet;
-
+use etherparse::{NetSlice, SlicedPacket, TransportSlice};
+use socket2::{Domain, Protocol, Socket, Type};
 #[cfg(target_os = "windows")]
-use pnet::ipnetwork::IpNetwork;
+use std::os::windows::io::AsRawSocket;
 
-//use self::pnet::packet::ethernet::Ethernet;
-use self::pnet::datalink::{self, NetworkInterface};
-use self::pnet::packet::ethernet::{EtherTypes, EthernetPacket, MutableEthernetPacket};
-use self::pnet::packet::ip::{IpNextHeaderProtocol, IpNextHeaderProtocols};
-use self::pnet::packet::ipv4::Ipv4Packet;
-use self::pnet::packet::ipv6::Ipv6Packet;
-use self::pnet::packet::tcp::{TcpFlags, TcpPacket};
-use self::pnet::packet::udp::UdpPacket;
-use self::pnet::packet::Packet;
-use self::pnet::util::MacAddr;
-
-//use std::env;
-//use std::io::{self, Write};
+use std::io::Read;
 use std::net::IpAddr;
-#[cfg(target_os = "windows")]
-use std::net::Ipv4Addr;
 use std::process;
-use std::str;
 
-//use std::collections::BinaryHeap;
-//use connection::raw_packet::RawPacket;
 use crate::core::game_state::GameState;
 use crate::core::network::d2gs::{D2GSPacket, D2GSReader};
 use crate::core::network::tcp_stream::{TcpReassemblyEvent, TcpStreamReassembler};
@@ -34,6 +17,15 @@ use crate::core::update::Update;
 const LEGACY_D2GS_PORT: u16 = 4000;
 const D2R_BNET_PORT: u16 = 1119;
 const MAX_BUFFERED_D2GS_BYTES: usize = 1024;
+
+mod tcp_flags {
+    pub const FIN: u16 = 0x01;
+    pub const SYN: u16 = 0x02;
+    pub const RST: u16 = 0x04;
+    // pub const PSH: u16 = 0x08;
+    // pub const ACK: u16 = 0x10;
+    // pub const URG: u16 = 0x20;
+}
 
 /// Transport classification for captured Diablo II traffic.
 ///
@@ -200,7 +192,7 @@ impl From<TcpReassemblyEvent> for ConnectionTransportWarning {
 pub enum ConnectionEvent {
     ServerMessage {
         packet: D2GSPacket,
-        message: ServerMessage,
+        message: Box<ServerMessage>,
         applied: bool,
     },
     ParseError {
@@ -238,7 +230,7 @@ impl ConnectionEvent {
 //     1119 TCP for D2R/modern Battle.net transport; not legacy D2GS framing
 
 pub struct Connection {
-    interface: NetworkInterface,
+    interface: netdev::Interface,
     initialized: bool,
     //protocol_state: ProtocolState,
     d2gs_reader: D2GSReader,
@@ -250,49 +242,34 @@ pub struct Connection {
 
 impl Connection {
     pub fn new() -> Self {
+        let interfaces = netdev::get_interfaces();
         Connection {
-            interface: datalink::interfaces().pop().unwrap(),
+            interface: interfaces.into_iter().next().unwrap(),
             initialized: false,
             d2gs_reader: D2GSReader::new(),
             d2gs_tcp_stream: TcpStreamReassembler::new(),
             d2gs_tcp_stream_key: None,
         }
     }
+}
 
+impl Default for Connection {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Connection {
     pub fn init(&mut self) {
         // Find the first network interface connected to the internet
-        // FIXME this only works on linux, for windows discerning whether an
-        // interface has an internet connection is not possible with libpnet
-        // maybe use
-        // https://microsoft.github.io/windows-docs-rs/doc/windows/Networking/Connectivity/struct.ConnectionProfile.html#method.GetNetworkConnectivityLevel
-        let interfaces = datalink::interfaces();
-        // linux/MacOs: should be easy to find an internet connected interface.
-        // TODO how to ensure it is the default iprouted one?
-        #[cfg(not(target_os = "windows"))]
-        let some_if: Option<NetworkInterface> = Some(
-            interfaces
-                .into_iter()
-                .find(|ref ifx| ifx.is_up() && !ifx.is_loopback() && !ifx.ips.is_empty())
-                .unwrap(),
-        );
-        // windows: libpnet is not really helpful on windows as is_up() is always false.
-        // additionally, there is no way to tell between a regular interface and a
-        // disconnected interface with an ip (e.g. virtual adapter for VPN)
-        // for use on windows, you should disable all devices that are not in use even if they are not connected.
-        #[cfg(target_os = "windows")]
-        let some_if: Option<NetworkInterface> = Some(
-            interfaces
-                .into_iter()
-                .find(|ref ifx| {
-                    *(ifx.ips.first().unwrap())
-                        != IpNetwork::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0).unwrap()
-                })
-                .unwrap(),
-        );
+        let interfaces = netdev::get_interfaces();
+        let some_if = interfaces.into_iter().find(|ifx| {
+            ifx.is_up() && !ifx.is_loopback() && !ifx.ipv4.is_empty()
+        });
 
-        if some_if != None {
-            self.interface = some_if.unwrap();
-            println!("Identified network interface {}", self.interface);
+        if let Some(itf) = some_if {
+            self.interface = itf;
+            println!("Identified network interface {}", self.interface.name);
         } else {
             println!("No active network adapter found, aborting...");
             process::exit(1);
@@ -300,84 +277,31 @@ impl Connection {
 
         self.initialized = true;
     }
-    // thread function start_hook() ?
-    //pub fn get_packet() -> pnet::packet::TcpPacket {}
-    //pub fn build_packet() -> pnet::packet::TcpPacket {}
-    // add_packet allows external modules to add packages for injecting
-    //pub fn add_packet() -> bool {}
     pub fn listen(&mut self, game_state: &mut GameState) {
         self.listen_with_events(game_state, |_, _| {});
     }
 
     /// Starts the blocking packet-capture loop and emits decoded D2GS events.
     ///
-    /// This method is still blocking because libpnet's receiver waits for the
-    /// next frame. UI applications should call it from a worker thread. The
-    /// callback receives each parsed/failed packet plus the current game state
-    /// after a successfully parsed message has been applied.
+    /// This method is blocking because the underlying raw socket waits for the
+    /// next packet. UI applications should call it from a worker thread.
     pub fn listen_with_events<F>(&mut self, game_state: &mut GameState, mut on_event: F)
     where
         F: FnMut(ConnectionEvent, &GameState),
     {
-        use self::pnet::datalink::Channel::Ethernet;
-        let interface = self.interface.clone();
         if !self.initialized {
             println!("Connection: must init() before listen()");
             return;
         }
-        let capture_config = datalink::Config {
-            // We only need packets addressed to/from the local Diablo II client.
-            // Promiscuous mode is unnecessary for that use case and can fail on
-            // some Linux wireless drivers with ENODEV during PACKET_ADD_MEMBERSHIP.
-            promiscuous: false,
-            ..Default::default()
-        };
 
-        // Create a channel to receive on
-        let (_, mut rx_channel) = match datalink::channel(&self.interface, capture_config) {
-            Ok(Ethernet(tx, rx_channel)) => (tx, rx_channel),
-            Ok(_) => panic!("{}", "unhandled channel type: {}"),
-            Err(e) => panic!("unable to create channel: {}", e),
-        };
+        let mut socket = self.create_raw_socket();
+        let mut buf = [0u8; 2048];
 
         loop {
-            let mut buf: [u8; 1600] = [0u8; 1600];
-            let mut fake_ethernet_frame = MutableEthernetPacket::new(&mut buf[..]).unwrap();
-            match rx_channel.next() {
-                Ok(packet) => {
-                    if cfg!(target_os = "macos")
-                        && !interface.is_broadcast()
-                        && interface.is_point_to_point()
-                    {
-                        // Maybe is TUN interface
-                        let Some(ipv4_packet) = Ipv4Packet::new(packet) else {
-                            eprintln!("[{}]: Malformed point-to-point IP packet", interface.name);
-                            continue;
-                        };
-                        let version = ipv4_packet.get_version();
+            match socket.read(&mut buf) {
 
-                        fake_ethernet_frame.set_destination(MacAddr(0, 0, 0, 0, 0, 0));
-                        fake_ethernet_frame.set_source(MacAddr(0, 0, 0, 0, 0, 0));
-                        if version == 4 {
-                            fake_ethernet_frame.set_ethertype(EtherTypes::Ipv4);
-                            continue;
-                        } else if version == 6 {
-                            fake_ethernet_frame.set_ethertype(EtherTypes::Ipv6);
-                            continue;
-                        }
-                        fake_ethernet_frame.set_payload(&packet);
-                        self.handle_ethernet_frame(
-                            &interface,
-                            &fake_ethernet_frame.to_immutable(),
-                            game_state,
-                            &mut on_event,
-                        );
-                    }
-                    let Some(ethernet) = EthernetPacket::new(packet) else {
-                        eprintln!("[{}]: Malformed Ethernet frame", interface.name);
-                        continue;
-                    };
-                    self.handle_ethernet_frame(&interface, &ethernet, game_state, &mut on_event);
+                Ok(n) => {
+                    self.handle_raw_packet(&buf[..n], game_state, &mut on_event);
                 }
                 Err(e) => {
                     eprintln!("unable to receive packet: {}", e);
@@ -387,195 +311,125 @@ impl Connection {
         }
     }
 
-    fn handle_udp_packet<F>(
-        &mut self,
-        _source: IpAddr,
-        _destination: IpAddr,
-        packet: &[u8],
-        game_state: &mut GameState,
-        on_event: &mut F,
-    ) where
-        F: FnMut(ConnectionEvent, &GameState),
-    {
-        let udp = UdpPacket::new(packet);
+    fn create_raw_socket(&self) -> Socket {
+        #[cfg(target_os = "windows")]
+        {
+            // Protocol 0 is IPPROTO_IP
+            let socket = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::from(0))).expect("Failed to create Windows raw socket");
+            
+            // On Windows we must bind to a local interface IP to use SIO_RCVALL
+            if let Some(ip) = self.interface.ipv4.first() {
+                socket.bind(&std::net::SocketAddrV4::new(ip.addr(), 0).into()).expect("Failed to bind raw socket");
+            }
 
-        if let Some(udp) = udp {
-            // filter packet by ports used by d2, will continue for both sent & received
-            //if !PORTS.contains(&udp.get_destination()) && !PORTS.contains(&udp.get_source()) {
-            //    return
-            //}
-            match classify_transport(udp.get_source(), udp.get_destination()) {
-                CapturedTransport::LegacyD2gsServerToClient => {
-                    self.read_d2gs_payload(udp.payload(), game_state, on_event)
+            let rcval_on: u32 = 1; // SIO_RCVALL_ON
+            let mut bytes_returned: u32 = 0;
+            unsafe {
+                let r = windows_sys::Win32::Networking::WinSock::WSAIoctl(
+                    socket.as_raw_socket() as _,
+                    0x98000001, // SIO_RCVALL
+                    &rcval_on as *const _ as _,
+                    std::mem::size_of::<u32>() as u32,
+                    std::ptr::null_mut(),
+                    0,
+                    &mut bytes_returned,
+                    std::ptr::null_mut(),
+                    None,
+                );
+                if r != 0 {
+                    eprintln!("Warning: WSAIoctl SIO_RCVALL failed ({}). Ensure running as Admin.", std::io::Error::last_os_error());
                 }
-                CapturedTransport::LegacyD2gsClientToServer => {}
-                CapturedTransport::D2rEncryptedOrUnknown | CapturedTransport::Ignored => {}
             }
-            // println!(
-            //         "UDP {}:{} > {}:{}  len={:03}  {:x?}  {:?}",
-            //         source,
-            //         udp.get_source(),
-            //         destination,
-            //         udp.get_destination(),
-            //         udp.payload().len(),
-            //         udp.payload(),
-            //         String::from_utf8_lossy(udp.payload()).into_owned()
-            // );
-        } else {
-            println!("Malformed UDP Packet");
+            socket
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            // ETH_P_ALL = 0x0003
+            Socket::new(Domain::PACKET, Type::RAW, Some(Protocol::from(0x0003))).expect("Failed to create Linux raw socket")
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        {
+            panic!("Unsupported platform for driverless raw sockets. Implementation for BPF/macOS needed.");
         }
     }
 
-    fn handle_tcp_packet<F>(
+    fn handle_raw_packet<F>(
         &mut self,
-        source: IpAddr,
-        destination: IpAddr,
-        packet: &[u8],
+        data: &[u8],
         game_state: &mut GameState,
         on_event: &mut F,
     ) where
         F: FnMut(ConnectionEvent, &GameState),
     {
-        let tcp = TcpPacket::new(packet);
-        if let Some(tcp) = tcp {
-            // filter packet by ports used by d2, will continue for both sent & received
-            //if !PORTS.contains(&tcp.get_destination()) {//&& !PORTS.contains(&tcp.get_source()) {
-            //    return
-            //}
-            match classify_transport(tcp.get_source(), tcp.get_destination()) {
-                CapturedTransport::LegacyD2gsServerToClient => {
-                    let stream_key = TcpStreamKey::new(
-                        source,
-                        destination,
-                        tcp.get_source(),
-                        tcp.get_destination(),
-                    );
-                    self.read_legacy_d2gs_tcp_segment(
-                        stream_key,
-                        tcp.get_flags(),
-                        tcp.get_sequence(),
-                        tcp.payload(),
-                        game_state,
-                        on_event,
-                    );
+        // Try parsing as Ethernet (Linux/macOS)
+        if let Ok(packet) = SlicedPacket::from_ethernet(data) {
+            self.handle_sliced_packet(packet, game_state, on_event);
+            return;
+        }
+
+        // Fallback to IP (Windows SIO_RCVALL or TUN/TAP)
+        if let Ok(packet) = SlicedPacket::from_ip(data) {
+            self.handle_sliced_packet(packet, game_state, on_event);
+        }
+    }
+
+    fn handle_sliced_packet<F>(
+        &mut self,
+        packet: SlicedPacket,
+        game_state: &mut GameState,
+        on_event: &mut F,
+    ) where
+        F: FnMut(ConnectionEvent, &GameState),
+    {
+        let (source_ip, dest_ip) = match &packet.net {
+            Some(NetSlice::Ipv4(ipv4)) => (
+                IpAddr::V4(ipv4.header().source_addr()),
+                IpAddr::V4(ipv4.header().destination_addr()),
+            ),
+            Some(NetSlice::Ipv6(ipv6)) => (
+                IpAddr::V6(ipv6.header().source_addr()),
+                IpAddr::V6(ipv6.header().destination_addr()),
+            ),
+            _ => return,
+        };
+
+        if let Some(TransportSlice::Tcp(tcp)) = &packet.transport {
+            if classify_transport(tcp.source_port(), tcp.destination_port())
+                == CapturedTransport::LegacyD2gsServerToClient
+            {
+                let stream_key = TcpStreamKey::new(
+                    source_ip,
+                    dest_ip,
+                    tcp.source_port(),
+                    tcp.destination_port(),
+                );
+                let mut flags = 0u16;
+                if tcp.fin() {
+                    flags |= tcp_flags::FIN;
                 }
-                CapturedTransport::LegacyD2gsClientToServer => {}
-                CapturedTransport::D2rEncryptedOrUnknown | CapturedTransport::Ignored => {}
+                if tcp.syn() {
+                    flags |= tcp_flags::SYN;
+                }
+                if tcp.rst() {
+                    flags |= tcp_flags::RST;
+                }
+                self.read_legacy_d2gs_tcp_segment(
+                    stream_key,
+                    flags,
+                    tcp.sequence_number(),
+                    tcp.payload(),
+                    game_state,
+                    on_event,
+                );
             }
-            // println!(
-            //     "TCP {}:{} > {}:{}  len={:03}  {:x?}  {:?}",
-            //     source,
-            //     tcp.get_source(),
-            //     destination,
-            //     tcp.get_destination(),
-            //     tcp.payload().len(),
-            //     tcp.payload(),
-            //     String::from_utf8_lossy(tcp.payload()).into_owned()
-            // );
-        } else {
-            println!("Malformed TCP Packet");
-        }
-    }
-
-    fn handle_transport_protocol<F>(
-        &mut self,
-        _interface_name: &str,
-        source: IpAddr,
-        destination: IpAddr,
-        protocol: IpNextHeaderProtocol,
-        packet: &[u8],
-        game_state: &mut GameState,
-        on_event: &mut F,
-    ) where
-        F: FnMut(ConnectionEvent, &GameState),
-    {
-        match protocol {
-            IpNextHeaderProtocols::Udp => {
-                self.handle_udp_packet(source, destination, packet, game_state, on_event)
+        } else if let Some(TransportSlice::Udp(udp)) = &packet.transport {
+            if classify_transport(udp.source_port(), udp.destination_port())
+                == CapturedTransport::LegacyD2gsServerToClient
+            {
+                self.read_d2gs_payload(udp.payload(), game_state, on_event);
             }
-            IpNextHeaderProtocols::Tcp => {
-                self.handle_tcp_packet(source, destination, packet, game_state, on_event)
-            }
-            _ => (),
-        }
-    }
-
-    fn handle_ipv4_packet<F>(
-        &mut self,
-        interface_name: &str,
-        ethernet: &EthernetPacket,
-        game_state: &mut GameState,
-        on_event: &mut F,
-    ) where
-        F: FnMut(ConnectionEvent, &GameState),
-    {
-        let header = Ipv4Packet::new(ethernet.payload());
-        if let Some(header) = header {
-            self.handle_transport_protocol(
-                interface_name,
-                IpAddr::V4(header.get_source()),
-                IpAddr::V4(header.get_destination()),
-                header.get_next_level_protocol(),
-                header.payload(),
-                game_state,
-                on_event,
-            );
-        } else {
-            println!("[{}]: Malformed IPv4 Packet", interface_name);
-        }
-    }
-
-    fn handle_ipv6_packet<F>(
-        &mut self,
-        interface_name: &str,
-        ethernet: &EthernetPacket,
-        game_state: &mut GameState,
-        on_event: &mut F,
-    ) where
-        F: FnMut(ConnectionEvent, &GameState),
-    {
-        let header = Ipv6Packet::new(ethernet.payload());
-        if let Some(header) = header {
-            self.handle_transport_protocol(
-                interface_name,
-                IpAddr::V6(header.get_source()),
-                IpAddr::V6(header.get_destination()),
-                header.get_next_header(),
-                header.payload(),
-                game_state,
-                on_event,
-            );
-        } else {
-            println!("[{}]: Malformed IPv6 Packet", interface_name);
-        }
-    }
-
-    fn handle_ethernet_frame<F>(
-        &mut self,
-        interface: &NetworkInterface,
-        ethernet: &EthernetPacket,
-        game_state: &mut GameState,
-        on_event: &mut F,
-    ) where
-        F: FnMut(ConnectionEvent, &GameState),
-    {
-        let interface_name = &interface.name[..];
-        match ethernet.get_ethertype() {
-            EtherTypes::Ipv4 => {
-                self.handle_ipv4_packet(interface_name, ethernet, game_state, on_event)
-            }
-            EtherTypes::Ipv6 => {
-                self.handle_ipv6_packet(interface_name, ethernet, game_state, on_event)
-            }
-            _ => (), // TODO make debug only print
-                     // println!(
-                     // "[{}]: Unknown packet: {} > {}; ethertype: {:?} length: {}",
-                     // interface_name,
-                     // ethernet.get_source(),
-                     // ethernet.get_destination(),
-                     // ethernet.get_ethertype(),
-                     // ethernet.packet().len()
-                     //),
         }
     }
 
@@ -621,7 +475,7 @@ impl Connection {
         F: FnMut(ConnectionEvent, &GameState),
     {
         if self.d2gs_tcp_stream_key.as_ref() != Some(&stream_key)
-            || tcp_flags & (TcpFlags::SYN | TcpFlags::RST) != 0
+            || tcp_flags & (tcp_flags::SYN | tcp_flags::RST) != 0
         {
             self.d2gs_tcp_stream.reset();
             self.d2gs_reader.reset();
@@ -629,7 +483,7 @@ impl Connection {
         }
 
         if payload.is_empty() {
-            if tcp_flags & TcpFlags::FIN != 0 {
+            if tcp_flags & tcp_flags::FIN != 0 {
                 self.d2gs_tcp_stream.reset();
                 self.d2gs_reader.reset();
             }
@@ -654,7 +508,7 @@ impl Connection {
             self.read_d2gs_payload(payload, game_state, on_event);
         }
 
-        if tcp_flags & TcpFlags::FIN != 0 {
+        if tcp_flags & tcp_flags::FIN != 0 {
             self.d2gs_tcp_stream.reset();
             self.d2gs_reader.reset();
         }
@@ -718,7 +572,7 @@ where
                 on_event(
                     ConnectionEvent::ServerMessage {
                         packet,
-                        message,
+                        message: Box::new(message),
                         applied,
                     },
                     game_state,
@@ -792,12 +646,16 @@ mod tests {
         match &events[0] {
             ConnectionEvent::ServerMessage {
                 packet,
-                message: ServerMessage::AssignPlayer { unit_id, x, y, .. },
+                message,
                 applied,
             } => {
                 assert_eq!(packet.packet_id(), 0x59);
-                assert_eq!(*unit_id, 0x0102_0304);
-                assert_eq!((*x, *y), (1234, 5678));
+                if let ServerMessage::AssignPlayer { unit_id, x, y, .. } = **message {
+                    assert_eq!(unit_id, 0x0102_0304);
+                    assert_eq!((x, y), (1234, 5678));
+                } else {
+                    panic!("unexpected message variant");
+                }
                 assert!(*applied);
             }
             other => panic!("unexpected connection event: {:?}", other),
@@ -820,10 +678,10 @@ mod tests {
         assert!(events.iter().all(|event| matches!(
             event,
             ConnectionEvent::ServerMessage {
-                message: ServerMessage::MapReveal { .. },
+                message,
                 applied: true,
                 ..
-            }
+            } if matches!(**message, ServerMessage::MapReveal { .. })
         )));
     }
 
@@ -875,10 +733,10 @@ mod tests {
         assert!(recovery_events.iter().any(|event| matches!(
             event,
             ConnectionEvent::ServerMessage {
-                message: ServerMessage::MapReveal { .. },
+                message,
                 applied: true,
                 ..
-            }
+            } if matches!(**message, ServerMessage::MapReveal { .. })
         )));
         assert!(!state.map().revealed_tiles.is_empty());
     }
