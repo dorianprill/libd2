@@ -1,4 +1,4 @@
-# libd2r Architecture
+# libd2 Architecture
 
 This document captures the current architecture and intended direction of the
 library. It should be updated whenever modules are added, packet flow changes,
@@ -27,7 +27,7 @@ src/core/
 
   network/
     connection.rs
-      interface selection and packet capture through pnet
+      interface discovery (netdev) and driverless packet capture (socket2)
     tcp_stream.rs
       ordered server-to-client TCP payload reconstruction for live D2GS capture
     d2gs/
@@ -89,13 +89,16 @@ src/core/
 Network interface
     |
     v
-pnet datalink channel
+netdev interface selection
+    |
+    v
+socket2 raw socket (driverless SIO_RCVALL on Windows)
     |
     v
 Connection::listen_with_events(&mut GameState, callback)
     |
     v
-Ethernet -> IPv4/IPv6 -> TCP/UDP filtering
+etherparse (Ethernet/IP/TCP slicing)
     |
     v
 TCP sequence ordering / retransmission handling for live port-4000 streams
