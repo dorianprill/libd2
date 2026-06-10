@@ -658,7 +658,7 @@ pub fn decrypt_mpq_block_range(
         .checked_add(size)
         .filter(|end| *end <= data.len())
         .is_none()
-        || size % 4 != 0
+        || !size.is_multiple_of(4)
     {
         return Err(MpqError::InvalidDecryptRange { offset, size });
     }

@@ -76,6 +76,7 @@ pub struct MapTile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default)]
 pub struct GameMapState {
     pub act: Option<u8>,
     pub map_id: Option<u32>,
@@ -84,17 +85,6 @@ pub struct GameMapState {
     pub revealed_tiles: HashSet<MapTile>,
 }
 
-impl Default for GameMapState {
-    fn default() -> Self {
-        Self {
-            act: None,
-            map_id: None,
-            area_id: None,
-            automap: None,
-            revealed_tiles: HashSet::new(),
-        }
-    }
-}
 
 /// Raw server item-stat update captured from D2GS packet `0x3E`.
 ///

@@ -290,6 +290,7 @@ pub struct CharacterFile {
 /// supply an explicit table when they need to preserve fixture bytes or when a
 /// capture did not include the skill-list packet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub struct CharacterExportOptions {
     skills: Option<[u8; 30]>,
 }
@@ -316,11 +317,6 @@ impl CharacterExportOptions {
     }
 }
 
-impl Default for CharacterExportOptions {
-    fn default() -> Self {
-        Self { skills: None }
-    }
-}
 
 impl CharacterFile {
     pub fn parse(bytes: impl Into<Vec<u8>>) -> Result<Self, CharacterFileError> {
