@@ -40,7 +40,7 @@ pub use crate::core::mpq::{
     MpqHashEntry, MpqHashType, MpqHeader,
 };
 pub use crate::core::network::connection::{
-    Connection, ConnectionEvent, ConnectionTransportWarning,
+    Connection, ConnectionEvent, ConnectionTransportWarning, D2gsBufferSnapshot,
 };
 pub use crate::core::network::d2gs::D2GSPacket;
 pub use crate::core::object::item::{

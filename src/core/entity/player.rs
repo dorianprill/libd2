@@ -180,6 +180,7 @@ pub struct Player {
     vitals: Option<PlayerVitals>,
     movement: Option<PlayerMovement>,
     world_location_known: bool,
+    area_id: Option<u16>,
     // TODO
     // stash:       Container;
     // cube:        Container;
@@ -208,6 +209,7 @@ impl Player {
             vitals: None,
             movement: None,
             world_location_known: true,
+            area_id: None,
         }
     }
 
@@ -258,6 +260,14 @@ impl Player {
 
     pub fn clear_world_location(&mut self) {
         self.world_location_known = false;
+    }
+
+    pub fn area_id(&self) -> Option<u16> {
+        self.area_id
+    }
+
+    pub fn set_area_id(&mut self, area_id: u16) {
+        self.area_id = Some(area_id);
     }
 
     pub fn vitals(&self) -> Option<PlayerVitals> {

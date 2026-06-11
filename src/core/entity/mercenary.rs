@@ -107,6 +107,10 @@ impl Mercenary {
         self.owner_id
     }
 
+    pub fn set_owner_id(&mut self, owner_id: u32) {
+        self.owner_id = owner_id;
+    }
+
     pub fn skill_id(&self) -> u8 {
         self.skill_id
     }

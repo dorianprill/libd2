@@ -710,7 +710,7 @@ pub enum ServerMessage {
         unit_type: u8,
         unit_life: u16,
         unit_id: u32,
-        unit_area: u32,
+        unit_area: u16,
     } = 0x7F,
 
     Unused30 = 0x80,
@@ -1604,6 +1604,15 @@ impl ServerMessage {
                     flags: cursor.u32_le(),
                 })
             }
+            0x7F => {
+                let mut cursor = PacketCursor::new(input, 10)?;
+                Ok(Self::AllyPartyInfo {
+                    unit_type: cursor.u8(),
+                    unit_life: cursor.u16_le(),
+                    unit_id: cursor.u32_le(),
+                    unit_area: cursor.u16_le(),
+                })
+            }
             0x8F => {
                 let mut cursor = PacketCursor::new(input, 33)?;
                 Ok(Self::Pong {
@@ -2270,6 +2279,17 @@ mod tests {
 
     #[test]
     fn parse_merc_packets_read_assignment_and_stat_updates() {
+        assert_eq!(
+            ServerMessage::parse(&[0x7F, 0x00, 0x64, 0x00, 0x44, 0x33, 0x22, 0x11, 0x02, 0x00])
+                .expect("ally party info should parse"),
+            ServerMessage::AllyPartyInfo {
+                unit_type: 0,
+                unit_life: 100,
+                unit_id: 0x1122_3344,
+                unit_area: 2,
+            }
+        );
+
         assert_eq!(
             ServerMessage::parse(&[
                 0x81, 0x0A, 0x52, 0x01, 0x44, 0x33, 0x22, 0x11, 0x88, 0x77, 0x66, 0x55, 0xCC, 0xBB,
