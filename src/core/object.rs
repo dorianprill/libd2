@@ -55,6 +55,10 @@ impl WorldObject {
         self.state
     }
 
+    pub fn set_location(&mut self, location: Coordinate) {
+        self.location = location;
+    }
+
     pub fn interaction(&self) -> u8 {
         self.interaction
     }

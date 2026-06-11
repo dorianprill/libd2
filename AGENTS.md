@@ -19,6 +19,7 @@ As the base for this game is quite old, there have been numerous efforts to reve
 
 - https://github.com/blizzhackers/kolbot (Data structures and game mechanics)
 - https://github.com/blizzhackers/kolbot-SoloPlay (Solo play strategy  implementation)
+- https://github.com/blizzhackers/Diablo2PacketsData
 - https://github.com/noah-/d2bs the diablo 2 botting system (awesome!)
 - https://github.com/blacha/diablo2  (Network traffic interception and parsing and visualization of game state)
 - https://github.com/OpenDiablo2/OpenDiablo2 (Reverse engineering of game mechanics and data structures, as well as implementation of a custom game client, ARCHIVED)

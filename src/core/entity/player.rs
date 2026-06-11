@@ -108,6 +108,62 @@ impl PlayerMovement {
     }
 }
 
+/// Base skill levels known for one player.
+///
+/// D2GS packet `0x94` uses global `Skills.txt` ids, while legacy `.d2s` files
+/// store exactly 30 bytes in the `if` section for the character's own class.
+/// The class-local save slots are simple offsets for vanilla Diablo II:
+/// Amazon `6`, Sorceress `36`, Necromancer `66`, Paladin `96`, Barbarian
+/// `126`, Druid `221`, and Assassin `251`. Off-class skills can still appear
+/// in live traffic through charges or granted skills, so this type preserves
+/// the raw ids and filters only when a save table is requested.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PlayerSkillLevels {
+    by_skill_id: HashMap<u16, u8>,
+}
+
+impl PlayerSkillLevels {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn set(&mut self, skill_id: u16, level: u8) {
+        self.by_skill_id.insert(skill_id, level);
+    }
+
+    pub fn get(&self, skill_id: u16) -> Option<u8> {
+        self.by_skill_id.get(&skill_id).copied()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (u16, u8)> + '_ {
+        self.by_skill_id
+            .iter()
+            .map(|(skill_id, level)| (*skill_id, *level))
+    }
+
+    /// Builds the 30-byte legacy `.d2s` class-skill table for `class`.
+    ///
+    /// Save files do not include global skill ids in the `if` section. They
+    /// rely on the character class to choose the fixed `Skills.txt` id offset,
+    /// then write one byte per class skill. Unknown or off-class ids are
+    /// intentionally ignored here rather than projected into the wrong slot.
+    pub fn to_legacy_save_table(&self, class: CharacterClass) -> [u8; 30] {
+        let mut table = [0; 30];
+        for (skill_id, level) in self.iter() {
+            if let Some(slot) = Self::legacy_save_slot(class, skill_id) {
+                table[slot] = level;
+            }
+        }
+        table
+    }
+
+    pub fn legacy_save_slot(class: CharacterClass, skill_id: u16) -> Option<usize> {
+        let offset = legacy_skill_offset(class)?;
+        let slot = skill_id.checked_sub(offset)?;
+        (slot < 30).then_some(slot as usize)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Player {
     class: CharacterClass,
@@ -120,6 +176,7 @@ pub struct Player {
     level: u32,
     portal_id: u32,
     stats: HashMap<u16, u32>,
+    skills: PlayerSkillLevels,
     vitals: Option<PlayerVitals>,
     movement: Option<PlayerMovement>,
     world_location_known: bool,
@@ -147,6 +204,7 @@ impl Player {
             level: 0,
             portal_id: 0,
             stats: HashMap::new(),
+            skills: PlayerSkillLevels::new(),
             vitals: None,
             movement: None,
             world_location_known: true,
@@ -269,6 +327,22 @@ impl Player {
         self.stats.get(&stat_id).copied()
     }
 
+    pub fn skills(&self) -> &PlayerSkillLevels {
+        &self.skills
+    }
+
+    pub fn skills_mut(&mut self) -> &mut PlayerSkillLevels {
+        &mut self.skills
+    }
+
+    pub fn set_skill_level(&mut self, skill_id: u16, level: u8) {
+        self.skills.set(skill_id, level);
+    }
+
+    pub fn legacy_save_skills(&self) -> [u8; 30] {
+        self.skills.to_legacy_save_table(self.class)
+    }
+
     pub fn set_stat(&mut self, stat_id: u16, value: u32) {
         self.stats.insert(stat_id, value);
         if stat_id == UnitStat::Level as u16 {
@@ -279,6 +353,19 @@ impl Player {
     pub fn add_stat(&mut self, stat_id: u16, value: u32) {
         let current = self.stat(stat_id).unwrap_or_default();
         self.set_stat(stat_id, current.saturating_add(value));
+    }
+}
+
+fn legacy_skill_offset(class: CharacterClass) -> Option<u16> {
+    match class {
+        CharacterClass::Amazon => Some(6),
+        CharacterClass::Sorceress => Some(36),
+        CharacterClass::Necromancer => Some(66),
+        CharacterClass::Paladin => Some(96),
+        CharacterClass::Barbarian => Some(126),
+        CharacterClass::Druid => Some(221),
+        CharacterClass::Assassin => Some(251),
+        CharacterClass::Warlock => None,
     }
 }
 

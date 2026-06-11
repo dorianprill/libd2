@@ -13,6 +13,7 @@ pub mod network;
 pub mod object;
 pub mod party;
 pub mod protocol;
+pub mod quest;
 pub mod unit_stat;
 pub mod update;
 pub mod version;

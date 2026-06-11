@@ -2,12 +2,15 @@ use std::collections::{HashMap, HashSet};
 
 use crate::core::character_class::CharacterClass;
 use crate::core::coordinate::Coordinate;
+use crate::core::entity::mercenary::Mercenary;
+use crate::core::entity::missile::Missile;
 use crate::core::entity::npc::Npc;
 use crate::core::entity::player::{Player, PlayerMovement, PlayerVitals};
 use crate::core::network::d2gs::D2GSPacket;
 use crate::core::object::item::{Item, ItemStateFlags};
 use crate::core::object::WorldObject;
-use crate::core::protocol::server_message::ServerMessageParseError;
+use crate::core::protocol::server_message::{ServerMessageParseError, SkillDescription};
+use crate::core::quest::PlayerQuestLog;
 use crate::core::unit_stat::UnitStat;
 use crate::core::update::Update;
 use crate::ServerMessage;
@@ -123,6 +126,85 @@ impl ItemStatUpdate {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct UnitKey {
+    unit_type: u8,
+    unit_id: u32,
+}
+
+impl UnitKey {
+    pub fn new(unit_type: u8, unit_id: u32) -> Self {
+        Self { unit_type, unit_id }
+    }
+
+    pub fn unit_type(&self) -> u8 {
+        self.unit_type
+    }
+
+    pub fn unit_id(&self) -> u32 {
+        self.unit_id
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerCorpse {
+    owner_id: u32,
+    corpse_id: u32,
+}
+
+impl PlayerCorpse {
+    pub fn new(owner_id: u32, corpse_id: u32) -> Self {
+        Self {
+            owner_id,
+            corpse_id,
+        }
+    }
+
+    pub fn owner_id(&self) -> u32 {
+        self.owner_id
+    }
+
+    pub fn corpse_id(&self) -> u32 {
+        self.corpse_id
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct UnitStateSet {
+    explicit_states: HashMap<u8, Vec<u8>>,
+    multi_state_effects: Option<Vec<u8>>,
+}
+
+impl UnitStateSet {
+    pub fn state_effects(&self, state: u8) -> Option<&[u8]> {
+        self.explicit_states.get(&state).map(Vec::as_slice)
+    }
+
+    pub fn explicit_states(&self) -> &HashMap<u8, Vec<u8>> {
+        &self.explicit_states
+    }
+
+    pub fn multi_state_effects(&self) -> Option<&[u8]> {
+        self.multi_state_effects.as_deref()
+    }
+
+    fn set_state(&mut self, state: u8, state_effects: Vec<u8>) {
+        self.explicit_states.insert(state, state_effects);
+    }
+
+    fn clear_state(&mut self, state: u8) -> bool {
+        self.explicit_states.remove(&state).is_some()
+    }
+
+    fn set_multi_state_effects(&mut self, state_effects: Vec<u8>) {
+        self.multi_state_effects = Some(state_effects);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.explicit_states.is_empty() && self.multi_state_effects.is_none()
+    }
+}
+
 #[derive(Debug)]
 pub struct GameState {
     pub(crate) players: HashMap<u32, Player>,
@@ -136,7 +218,11 @@ pub struct GameState {
     /// pulses, and movement/stat updates all hit the same canonical [`Player`].
     pub(crate) player_aliases: HashMap<u32, u32>,
     pub(crate) npcs: HashMap<u32, Npc>,
+    pub(crate) mercenaries: HashMap<u32, Mercenary>,
+    pub(crate) missiles: HashMap<u32, Missile>,
     pub(crate) objects: HashMap<u32, WorldObject>,
+    pub(crate) player_corpses: HashMap<u32, PlayerCorpse>,
+    pub(crate) unit_states: HashMap<UnitKey, UnitStateSet>,
     pub(crate) items: HashMap<u32, Item>,
     pub(crate) item_stat_updates: Vec<ItemStatUpdate>,
     pub(crate) game_type: GameServerType,
@@ -144,6 +230,7 @@ pub struct GameState {
     pub(crate) locale: Locale,
     pub(crate) map: GameMapState,
     pub(crate) local_player_id: Option<u32>,
+    pub(crate) player_quest_log: Option<PlayerQuestLog>,
     pub(crate) is_expansion: bool,
     pub(crate) is_ladder: bool,
     pub(crate) is_hardcore: bool,
@@ -155,7 +242,11 @@ impl GameState {
             players: HashMap::with_capacity(8),
             player_aliases: HashMap::with_capacity(8),
             npcs: HashMap::with_capacity(1024),
+            mercenaries: HashMap::with_capacity(8),
+            missiles: HashMap::with_capacity(256),
             objects: HashMap::with_capacity(256),
+            player_corpses: HashMap::with_capacity(16),
+            unit_states: HashMap::with_capacity(64),
             items: HashMap::with_capacity(256),
             item_stat_updates: Vec::with_capacity(64),
             game_type,
@@ -163,6 +254,7 @@ impl GameState {
             locale,
             map: GameMapState::default(),
             local_player_id: None,
+            player_quest_log: None,
             is_expansion: false,
             is_ladder: false,
             is_hardcore: false,
@@ -184,6 +276,22 @@ impl GameState {
 
     pub fn npcs(&self) -> &HashMap<u32, Npc> {
         &self.npcs
+    }
+
+    pub fn mercenaries(&self) -> &HashMap<u32, Mercenary> {
+        &self.mercenaries
+    }
+
+    pub fn mercenary(&self, id: u32) -> Option<&Mercenary> {
+        self.mercenaries.get(&id)
+    }
+
+    pub fn missiles(&self) -> &HashMap<u32, Missile> {
+        &self.missiles
+    }
+
+    pub fn missile(&self, id: u32) -> Option<&Missile> {
+        self.missiles.get(&id)
     }
 
     pub fn npc(&self, id: u32) -> Option<&Npc> {
@@ -210,12 +318,32 @@ impl GameState {
         &self.item_stat_updates
     }
 
+    pub fn player_corpses(&self) -> &HashMap<u32, PlayerCorpse> {
+        &self.player_corpses
+    }
+
+    pub fn player_corpse(&self, corpse_id: u32) -> Option<&PlayerCorpse> {
+        self.player_corpses.get(&corpse_id)
+    }
+
+    pub fn unit_states(&self) -> &HashMap<UnitKey, UnitStateSet> {
+        &self.unit_states
+    }
+
+    pub fn unit_state(&self, unit_type: u8, unit_id: u32) -> Option<&UnitStateSet> {
+        self.unit_states.get(&UnitKey::new(unit_type, unit_id))
+    }
+
     pub fn map(&self) -> &GameMapState {
         &self.map
     }
 
     pub fn local_player_id(&self) -> Option<u32> {
         self.local_player_id.map(|id| self.resolve_player_id(id))
+    }
+
+    pub fn player_quest_log(&self) -> Option<&PlayerQuestLog> {
+        self.player_quest_log.as_ref()
     }
 
     pub fn difficulty(&self) -> Difficulty {
@@ -269,6 +397,17 @@ impl GameState {
             return false;
         };
         player.set_stat(stat, amount);
+        true
+    }
+
+    fn set_player_skills(&mut self, unit_id: u32, skills: Vec<SkillDescription>) -> bool {
+        let unit_id = self.resolve_player_id(unit_id);
+        let Some(player) = self.players.get_mut(&unit_id) else {
+            return false;
+        };
+        for skill in skills {
+            player.set_skill_level(skill.skill, skill.level);
+        }
         true
     }
 
@@ -369,6 +508,14 @@ impl GameState {
     }
 
     fn move_or_create_npc(&mut self, unit_id: u32, location: Coordinate, life: Option<u8>) {
+        if let Some(mercenary) = self.mercenaries.get_mut(&unit_id) {
+            mercenary.set_location(location);
+            if let Some(life) = life {
+                mercenary.set_life_percent(life);
+            }
+            return;
+        }
+
         if life == Some(0) {
             self.npcs.remove(&unit_id);
             return;
@@ -391,11 +538,187 @@ impl GameState {
             });
     }
 
+    fn set_unit_location(&mut self, unit_type: u8, unit_id: u32, location: Coordinate) -> bool {
+        match unit_type {
+            0x00 => self.move_player(unit_id, location),
+            0x01 => {
+                self.move_or_create_npc(unit_id, location, None);
+                true
+            }
+            0x02 | 0x05 => {
+                let Some(object) = self.objects.get_mut(&unit_id) else {
+                    return false;
+                };
+                object.set_location(location);
+                true
+            }
+            0x03 => {
+                self.missiles
+                    .entry(unit_id)
+                    .and_modify(|missile| missile.set_location(location))
+                    .or_insert_with(|| Missile::new(unit_id, location));
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn upsert_missile(
+        &mut self,
+        missile_id: u32,
+        missile_class: u16,
+        location: Coordinate,
+        target: Coordinate,
+        current_frame: u16,
+        owner_type: u8,
+        owner_id: u32,
+        skill_level: u8,
+        pierce_level: u8,
+    ) {
+        self.missiles
+            .entry(missile_id)
+            .and_modify(|missile| {
+                missile.set_class_id(missile_class);
+                missile.set_location(location);
+                missile.set_target(target);
+                missile.set_current_frame(current_frame);
+                missile.set_owner_type(owner_type);
+                missile.set_owner_id(owner_id);
+                missile.set_skill_level(skill_level);
+                missile.set_pierce_level(pierce_level);
+            })
+            .or_insert_with(|| {
+                let mut missile = Missile::new(missile_id, location);
+                missile.set_class_id(missile_class);
+                missile.set_target(target);
+                missile.set_current_frame(current_frame);
+                missile.set_owner_type(owner_type);
+                missile.set_owner_id(owner_id);
+                missile.set_skill_level(skill_level);
+                missile.set_pierce_level(pierce_level);
+                missile
+            });
+    }
+
+    fn upsert_mercenary(
+        &mut self,
+        skill_id: u8,
+        summon_type: u16,
+        player_id: u32,
+        merc_id: u32,
+        seed2: u32,
+        init_seed: u32,
+    ) {
+        let player_id = self.resolve_player_id(player_id);
+        if let Some(player) = self.players.get_mut(&player_id) {
+            player.mercenary_id_set(merc_id);
+        }
+        self.npcs.remove(&merc_id);
+        self.mercenaries
+            .entry(merc_id)
+            .and_modify(|mercenary| {
+                mercenary.refresh_assignment(summon_type, player_id, skill_id, seed2, init_seed);
+            })
+            .or_insert_with(|| {
+                Mercenary::new(merc_id, summon_type, player_id, skill_id, seed2, init_seed)
+            });
+    }
+
+    fn current_mercenary_mut(&mut self) -> Option<&mut Mercenary> {
+        if let Some(local_player_id) = self.local_player_id {
+            let local_player_id = self.resolve_player_id(local_player_id);
+            if let Some(player) = self.players.get(&local_player_id) {
+                if player.has_mercenary() {
+                    return self.mercenaries.get_mut(&player.mercenary_id());
+                }
+            }
+        }
+
+        if self.mercenaries.len() == 1 {
+            let mercenary_id = *self.mercenaries.keys().next()?;
+            return self.mercenaries.get_mut(&mercenary_id);
+        }
+
+        None
+    }
+
+    fn set_mercenary_stat(&mut self, merc_id: u32, stat_id: u16, amount: u32) -> bool {
+        let Some(mercenary) = self.mercenaries.get_mut(&merc_id) else {
+            return false;
+        };
+        mercenary.set_stat(stat_id, amount);
+        true
+    }
+
+    fn add_mercenary_stat(&mut self, merc_id: u32, stat_id: u16, amount: u32) -> bool {
+        let Some(mercenary) = self.mercenaries.get_mut(&merc_id) else {
+            return false;
+        };
+        mercenary.add_stat(stat_id, amount);
+        true
+    }
+
+    fn set_current_mercenary_revive_cost(&mut self, revive_name_id: u16, revive_cost: u16) -> bool {
+        let Some(mercenary) = self.current_mercenary_mut() else {
+            return false;
+        };
+        mercenary.set_revive_info(revive_name_id, revive_cost);
+        true
+    }
+
+    fn update_player_corpse(&mut self, assign: u8, owner_id: u32, corpse_id: u32) -> bool {
+        if assign == 0 {
+            return self.player_corpses.remove(&corpse_id).is_some();
+        }
+        self.player_corpses
+            .insert(corpse_id, PlayerCorpse::new(owner_id, corpse_id));
+        true
+    }
+
+    fn set_unit_state(
+        &mut self,
+        unit_type: u8,
+        unit_id: u32,
+        state: u8,
+        state_effects: Vec<u8>,
+    ) -> bool {
+        self.unit_states
+            .entry(UnitKey::new(unit_type, unit_id))
+            .or_default()
+            .set_state(state, state_effects);
+        true
+    }
+
+    fn set_multi_states(&mut self, unit_type: u8, unit_id: u32, state_effects: Vec<u8>) -> bool {
+        self.unit_states
+            .entry(UnitKey::new(unit_type, unit_id))
+            .or_default()
+            .set_multi_state_effects(state_effects);
+        true
+    }
+
+    fn end_unit_state(&mut self, unit_type: u8, unit_id: u32, state: u8) -> bool {
+        let key = UnitKey::new(unit_type, unit_id);
+        let Some(state_set) = self.unit_states.get_mut(&key) else {
+            return false;
+        };
+        let removed = state_set.clear_state(state);
+        if state_set.is_empty() {
+            self.unit_states.remove(&key);
+        }
+        removed
+    }
+
     fn remove_unit(&mut self, unit_type: u8, unit_id: u32) -> bool {
+        self.player_corpses.remove(&unit_id);
+        self.unit_states.remove(&UnitKey::new(unit_type, unit_id));
         match unit_type {
             0x00 => self.clear_player_world_location(unit_id),
-            0x01 => self.npcs.remove(&unit_id).is_some(),
+            0x01 => {
+                self.mercenaries.remove(&unit_id).is_some() || self.npcs.remove(&unit_id).is_some()
+            }
             0x02 | 0x05 => self.objects.remove(&unit_id).is_some(),
+            0x03 => self.missiles.remove(&unit_id).is_some(),
             0x04 => self.items.remove(&unit_id).is_some(),
             _ => false,
         }
@@ -465,6 +788,11 @@ impl GameState {
             self.local_player_id = None;
         }
 
+        self.player_corpses
+            .retain(|_, corpse| corpse.owner_id() != unit_id && corpse.owner_id() != canonical_id);
+        self.unit_states.remove(&UnitKey::new(0, unit_id));
+        self.unit_states.remove(&UnitKey::new(0, canonical_id));
+
         removed
     }
 
@@ -479,10 +807,16 @@ impl GameState {
 
     fn clear_area_world_state(&mut self, preserve_local_player_location: bool) {
         self.npcs.clear();
+        self.missiles.clear();
         self.objects.clear();
+        self.player_corpses.clear();
+        self.unit_states.clear();
         self.items.clear();
         self.item_stat_updates.clear();
         self.map.revealed_tiles.clear();
+        for mercenary in self.mercenaries.values_mut() {
+            mercenary.clear_world_location();
+        }
         let retained_player_id = if preserve_local_player_location {
             self.local_player_id
                 .map(|local_id| self.resolve_player_id(local_id))
@@ -500,11 +834,16 @@ impl GameState {
         self.players.clear();
         self.player_aliases.clear();
         self.npcs.clear();
+        self.mercenaries.clear();
+        self.missiles.clear();
         self.objects.clear();
+        self.player_corpses.clear();
+        self.unit_states.clear();
         self.items.clear();
         self.item_stat_updates.clear();
         self.map = GameMapState::default();
         self.local_player_id = None;
+        self.player_quest_log = None;
     }
 }
 
@@ -643,6 +982,17 @@ impl Update for GameState {
                 y: current_y,
                 ..
             } => self.move_player(unit_id, Coordinate::new(current_x, current_y)),
+            ServerMessage::MultipleUnitsCoordsUpdate { units, .. } => {
+                let mut updated = false;
+                for unit in units {
+                    updated = self.set_unit_location(
+                        unit.unit_type,
+                        unit.unit_id,
+                        Coordinate::new(unit.x, unit.y),
+                    ) || updated;
+                }
+                updated
+            }
             ServerMessage::PlayerJoined {
                 player_id,
                 character_class,
@@ -686,6 +1036,40 @@ impl Update for GameState {
                 }
                 self.move_player(player_id, Coordinate::new(player_x as u16, player_y as u16))
             }
+            ServerMessage::PlayerSkillsInfo {
+                player_id, skills, ..
+            } => self.set_player_skills(player_id, skills),
+            ServerMessage::MissileData {
+                missile_id,
+                missile_class,
+                missile_x,
+                missile_y,
+                target_x,
+                target_y,
+                current_frame,
+                owner_type,
+                owner_id,
+                skill_level,
+                pierce_level,
+            } => {
+                self.upsert_missile(
+                    missile_id,
+                    missile_class,
+                    Coordinate::new(missile_x as u16, missile_y as u16),
+                    Coordinate::new(target_x as u16, target_y as u16),
+                    current_frame,
+                    owner_type,
+                    owner_id,
+                    skill_level,
+                    pierce_level,
+                );
+                true
+            }
+            ServerMessage::PlayerCorpseAssign {
+                assign,
+                owner_id,
+                corpse_id,
+            } => self.update_player_corpse(assign, owner_id, corpse_id),
             ServerMessage::RemoveObject { unit_type, unit_id } => {
                 self.remove_unit(unit_type, unit_id)
             }
@@ -716,6 +1100,10 @@ impl Update for GameState {
                         interaction,
                     ),
                 );
+                true
+            }
+            ServerMessage::PlayerQuestLogInfo { quest_bits } => {
+                self.player_quest_log = Some(PlayerQuestLog::new(quest_bits));
                 true
             }
             ServerMessage::NpcMove {
@@ -776,7 +1164,10 @@ impl Update for GameState {
             ServerMessage::NpcHeal {
                 unit_id, unit_life, ..
             } => {
-                if let Some(npc) = self.npcs.get_mut(&unit_id) {
+                if let Some(mercenary) = self.mercenaries.get_mut(&unit_id) {
+                    mercenary.set_life_percent(unit_life);
+                    true
+                } else if let Some(npc) = self.npcs.get_mut(&unit_id) {
                     npc.set_life_percent(unit_life);
                     true
                 } else {
@@ -791,17 +1182,81 @@ impl Update for GameState {
                 life_percent,
                 ..
             } => {
-                self.npcs.insert(
-                    unit_id,
-                    Npc::with_class(
+                if let Some(mercenary) = self.mercenaries.get_mut(&unit_id) {
+                    mercenary.set_location(Coordinate::new(unit_x, unit_y));
+                    mercenary.set_life_percent(life_percent);
+                } else {
+                    self.npcs.insert(
                         unit_id,
-                        unit_code,
-                        Coordinate::new(unit_x, unit_y),
-                        life_percent,
-                    ),
-                );
+                        Npc::with_class(
+                            unit_id,
+                            unit_code,
+                            Coordinate::new(unit_x, unit_y),
+                            life_percent,
+                        ),
+                    );
+                }
                 true
             }
+            ServerMessage::AssignMerc {
+                skill_id,
+                summon_type,
+                player_id,
+                merc_id,
+                seed2,
+                init_seed,
+            } => {
+                self.upsert_mercenary(skill_id, summon_type, player_id, merc_id, seed2, init_seed);
+                true
+            }
+            ServerMessage::MercReviveCost {
+                merc_name_id,
+                revive_cost,
+                ..
+            } => self.set_current_mercenary_revive_cost(merc_name_id, revive_cost),
+            ServerMessage::MercAttributeU8 {
+                attribute,
+                merc_id,
+                amount,
+            } => self.set_mercenary_stat(merc_id, attribute as u16, amount as u32),
+            ServerMessage::MercAttributeU16 {
+                attribute,
+                merc_id,
+                amount,
+            } => self.set_mercenary_stat(merc_id, attribute as u16, amount as u32),
+            ServerMessage::MercAttributeU32 {
+                attribute,
+                merc_id,
+                amount,
+            } => self.set_mercenary_stat(merc_id, attribute as u16, amount),
+            ServerMessage::MercAddExpU8 {
+                stat_id,
+                merc_id,
+                value,
+            } => self.add_mercenary_stat(merc_id, stat_id as u16, value as u32),
+            ServerMessage::MercAddExpU16 {
+                stat_id,
+                merc_id,
+                value,
+            } => self.add_mercenary_stat(merc_id, stat_id as u16, value as u32),
+            ServerMessage::SetState {
+                unit_type,
+                unit_id,
+                state,
+                state_effects,
+                ..
+            } => self.set_unit_state(unit_type, unit_id, state, state_effects),
+            ServerMessage::EndState {
+                unit_type,
+                unit_id,
+                state,
+            } => self.end_unit_state(unit_type, unit_id, state),
+            ServerMessage::MultiStates {
+                unit_type,
+                unit_id,
+                state_effects,
+                ..
+            } => self.set_multi_states(unit_type, unit_id, state_effects),
             ServerMessage::ItemActionWorld {
                 action,
                 category,
@@ -975,11 +1430,12 @@ impl<'a> StatusBitReader<'a> {
 mod tests {
     use crate::core::entity::Entity;
     use crate::core::network::d2gs::D2GSPacket;
+    use crate::core::quest::{QuestLogEntry, QuestLogEntryState};
     use crate::core::unit_stat::UnitStat;
     use crate::core::update::Update;
     use crate::{
-        CharacterClass, Difficulty, GameState, ItemDestination, ItemOwner, ItemPlacement,
-        ServerMessage,
+        CharacterClass, Coordinate, Difficulty, GameState, ItemDestination, ItemOwner,
+        ItemPlacement, ServerMessage, SkillDescription,
     };
 
     #[test]
@@ -1113,6 +1569,46 @@ mod tests {
 
         let player = state.player(7).expect("player exists");
         assert_eq!(player.level(), 42);
+    }
+
+    #[test]
+    fn player_skills_info_updates_raw_skills_and_legacy_save_table() {
+        let mut state = GameState::default();
+        state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: CharacterClass::Sorceress as u8,
+            szname: *b"Sorc\0\0\0\0\0\0\0\0\0\0\0\0",
+            x: 10,
+            y: 20,
+        });
+
+        assert!(state.update(ServerMessage::PlayerSkillsInfo {
+            skills_count: 3,
+            player_id: 7,
+            skills: vec![
+                SkillDescription {
+                    skill: 36,
+                    level: 3,
+                },
+                SkillDescription {
+                    skill: 64,
+                    level: 1,
+                },
+                SkillDescription {
+                    skill: 6,
+                    level: 20,
+                },
+            ],
+        }));
+
+        let player = state.player(7).expect("player exists");
+        assert_eq!(player.skills().get(36), Some(3));
+        assert_eq!(player.skills().get(64), Some(1));
+        assert_eq!(player.skills().get(6), Some(20));
+        let save_table = player.legacy_save_skills();
+        assert_eq!(save_table[0], 3);
+        assert_eq!(save_table[28], 1);
+        assert!(!save_table.contains(&20));
     }
 
     #[test]
@@ -1590,6 +2086,53 @@ mod tests {
     }
 
     #[test]
+    fn bulk_position_update_packet_moves_known_units_and_tracks_missiles() {
+        let mut state = GameState::default();
+        state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: 1,
+            szname: *b"Sorc\0\0\0\0\0\0\0\0\0\0\0\0",
+            x: 10,
+            y: 11,
+        });
+        state.update(ServerMessage::MonsterAssign {
+            unit_id: 55,
+            unit_code: 156,
+            unit_x: 300,
+            unit_y: 301,
+            life_percent: 100,
+            packet_size: 13,
+            bitstream: Vec::new(),
+        });
+
+        let packet = D2GSPacket {
+            data: vec![
+                0x16, 0x00, 0x00, 0x03, 0x00, 0x07, 0x00, 0x00, 0x00, 0x6F, 0x00, 0xDE, 0x00, 0x01,
+                0x37, 0x00, 0x00, 0x00, 0x4D, 0x01, 0xBC, 0x01, 0x03, 0x63, 0x00, 0x00, 0x00, 0x90,
+                0x01, 0x91, 0x01,
+            ],
+        };
+
+        let applied = state
+            .apply_packet(&packet)
+            .expect("bulk position update should parse");
+
+        assert!(applied);
+        assert_eq!(
+            state.player(7).expect("player exists").location(),
+            Coordinate::new(111, 222)
+        );
+        assert_eq!(
+            state.npc(55).expect("npc exists").location(),
+            Coordinate::new(333, 444)
+        );
+        assert_eq!(
+            state.missile(99).expect("missile exists").location(),
+            Coordinate::new(400, 401)
+        );
+    }
+
+    #[test]
     fn world_object_packet_bytes_parse_and_update_memory() {
         let mut state = GameState::default();
         let mut packet = vec![0x51, 0x02];
@@ -1723,6 +2266,150 @@ mod tests {
     }
 
     #[test]
+    fn missile_packet_bytes_parse_and_update_memory() {
+        let mut state = GameState::default();
+        let packet = D2GSPacket {
+            data: vec![
+                0x73, 0x78, 0x56, 0x34, 0x12, 0x9A, 0x00, 0x10, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00,
+                0x00, 0x30, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x07, 0x00, 0x01, 0x04, 0x03,
+                0x02, 0x01, 0x05, 0x06,
+            ],
+        };
+
+        let applied = state
+            .apply_packet(&packet)
+            .expect("missile packet should parse");
+
+        let missile = state.missile(0x1234_5678).expect("missile exists");
+        assert!(applied);
+        assert_eq!(missile.class_id(), Some(0x009A));
+        assert_eq!(missile.location(), Coordinate::new(16, 32));
+        assert_eq!(missile.target(), Some(Coordinate::new(48, 64)));
+        assert_eq!(missile.owner_id(), Some(0x0102_0304));
+        assert_eq!(missile.skill_level(), Some(5));
+        assert_eq!(missile.pierce_level(), Some(6));
+    }
+
+    #[test]
+    fn merc_packets_parse_and_update_assignment_stats_and_revive_info() {
+        let mut state = GameState::default();
+        state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: 1,
+            szname: *b"Sorc\0\0\0\0\0\0\0\0\0\0\0\0",
+            x: 10,
+            y: 11,
+        });
+        mark_local(&mut state, 7);
+
+        for packet in [
+            D2GSPacket {
+                data: vec![
+                    0x81, 0x0A, 0x52, 0x01, 0x07, 0x00, 0x00, 0x00, 0x88, 0x77, 0x66, 0x55, 0xCC,
+                    0xBB, 0xAA, 0x99, 0x00, 0xFF, 0xEE, 0xDD,
+                ],
+            },
+            D2GSPacket {
+                data: vec![0x9E, UnitStat::Level as u8, 0x88, 0x77, 0x66, 0x55, 90],
+            },
+            D2GSPacket {
+                data: vec![0xA1, UnitStat::Experience as u8, 0x88, 0x77, 0x66, 0x55, 5],
+            },
+            D2GSPacket {
+                data: vec![
+                    0xA2,
+                    UnitStat::Experience as u8,
+                    0x88,
+                    0x77,
+                    0x66,
+                    0x55,
+                    0x34,
+                    0x12,
+                ],
+            },
+            D2GSPacket {
+                data: vec![0x9B, 0x34, 0x12, 0x78, 0x56, 0x00, 0x00],
+            },
+        ] {
+            assert!(state
+                .apply_packet(&packet)
+                .expect("merc packet should parse"));
+        }
+
+        assert_eq!(
+            state.player(7).expect("player exists").mercenary_id(),
+            0x5566_7788
+        );
+
+        let merc = state.mercenary(0x5566_7788).expect("mercenary exists");
+        assert_eq!(merc.owner_id(), 7);
+        assert_eq!(merc.class_id(), 0x0152);
+        assert_eq!(merc.skill_id(), 0x0A);
+        assert_eq!(merc.stat(UnitStat::Level as u16), Some(90));
+        assert_eq!(merc.stat(UnitStat::Experience as u16), Some(0x1239));
+        assert_eq!(merc.revive_name_id(), Some(0x1234));
+        assert_eq!(merc.revive_cost(), Some(0x5678));
+    }
+
+    #[test]
+    fn player_corpse_packet_tracks_and_untracks_player_corpse_ids() {
+        let mut state = GameState::default();
+
+        assert!(state.update(ServerMessage::PlayerCorpseAssign {
+            assign: 1,
+            owner_id: 0x1122_3344,
+            corpse_id: 0x5566_7788,
+        }));
+
+        let corpse = state
+            .player_corpse(0x5566_7788)
+            .expect("player corpse should be tracked");
+        assert_eq!(corpse.owner_id(), 0x1122_3344);
+        assert_eq!(corpse.corpse_id(), 0x5566_7788);
+
+        assert!(state.update(ServerMessage::PlayerCorpseAssign {
+            assign: 0,
+            owner_id: 0x1122_3344,
+            corpse_id: 0x5566_7788,
+        }));
+        assert!(state.player_corpse(0x5566_7788).is_none());
+    }
+
+    #[test]
+    fn state_packets_track_single_and_multi_state_payloads() {
+        let mut state = GameState::default();
+
+        assert!(state.update(ServerMessage::SetState {
+            unit_type: 1,
+            unit_id: 55,
+            packet_size: 11,
+            state: 0x69,
+            state_effects: vec![0xAA, 0xBB, 0xCC],
+        }));
+        assert!(state.update(ServerMessage::MultiStates {
+            unit_type: 1,
+            unit_id: 55,
+            packet_size: 10,
+            state_effects: vec![0x01, 0x02, 0x03],
+        }));
+
+        let states = state.unit_state(1, 55).expect("unit states should exist");
+        assert_eq!(states.state_effects(0x69), Some(&[0xAA, 0xBB, 0xCC][..]));
+        assert_eq!(states.multi_state_effects(), Some(&[0x01, 0x02, 0x03][..]));
+
+        assert!(state.update(ServerMessage::EndState {
+            unit_type: 1,
+            unit_id: 55,
+            state: 0x69,
+        }));
+        let states = state
+            .unit_state(1, 55)
+            .expect("multi-state payload should remain");
+        assert_eq!(states.state_effects(0x69), None);
+        assert_eq!(states.multi_state_effects(), Some(&[0x01, 0x02, 0x03][..]));
+    }
+
+    #[test]
     fn npc_zero_life_removes_npc_memory() {
         let mut state = GameState::default();
         state.update(ServerMessage::MonsterAssign {
@@ -1769,6 +2456,68 @@ mod tests {
         assert_eq!(player.stat(UnitStat::Experience as u16), Some(1000));
     }
 
+    #[test]
+    fn player_quest_log_tracks_mandatory_and_optional_act_one_progress() {
+        let mut state = GameState::default();
+
+        assert!(state.update(ServerMessage::PlayerQuestLogInfo {
+            quest_bits: quest_log(&[
+                (QuestLogEntry::ActIIntroduction, 1),
+                (QuestLogEntry::DenOfEvil, completed_quest()),
+                (QuestLogEntry::TheSearchForCain, completed_quest()),
+                (QuestLogEntry::SistersToTheSlaughter, completed_quest()),
+                (QuestLogEntry::TravelToActII, 1),
+                (QuestLogEntry::ActIIIntroduction, 1),
+            ]),
+        }));
+
+        let quest_log = state.player_quest_log().expect("quest log should exist");
+        assert!(quest_log.entry(QuestLogEntry::DenOfEvil).is_completed());
+        assert!(quest_log
+            .entry(QuestLogEntry::SistersToTheSlaughter)
+            .is_completed());
+        assert!(quest_log.entry(QuestLogEntry::TravelToActII).is_set());
+        assert!(!quest_log
+            .entry(QuestLogEntry::TheForgottenTower)
+            .is_completed());
+    }
+
+    #[test]
+    fn player_quest_log_tracks_late_game_dependencies_separately_from_optional_quests() {
+        let mut state = GameState::default();
+
+        assert!(state.update(ServerMessage::PlayerQuestLogInfo {
+            quest_bits: quest_log(&[
+                (QuestLogEntry::TravelToActV, 1),
+                (QuestLogEntry::PostTerrorsEndCain, 1),
+                (QuestLogEntry::SiegeOnHarrogath, completed_quest()),
+                (QuestLogEntry::RescueOnMountArreat, completed_quest()),
+                (QuestLogEntry::RiteOfPassage, completed_quest()),
+                (QuestLogEntry::EveOfDestruction, completed_quest()),
+            ]),
+        }));
+
+        let quest_log = state.player_quest_log().expect("quest log should exist");
+        assert!(quest_log.entry(QuestLogEntry::TravelToActV).is_set());
+        assert!(quest_log.entry(QuestLogEntry::RiteOfPassage).is_completed());
+        assert!(quest_log
+            .entry(QuestLogEntry::EveOfDestruction)
+            .is_completed());
+        assert!(!quest_log.entry(QuestLogEntry::PrisonOfIce).is_completed());
+    }
+
+    #[test]
+    fn game_loading_clears_player_quest_log() {
+        let mut state = GameState::default();
+        assert!(state.update(ServerMessage::PlayerQuestLogInfo {
+            quest_bits: quest_log(&[(QuestLogEntry::TheSummoner, completed_quest())]),
+        }));
+        assert!(state.player_quest_log().is_some());
+
+        assert!(state.update(ServerMessage::GameLoading));
+        assert!(state.player_quest_log().is_none());
+    }
+
     fn mark_local(state: &mut GameState, unit_id: u32) {
         assert!(state.update(ServerMessage::GameHandshake {
             unit_type: 0,
@@ -1782,6 +2531,18 @@ mod tests {
         let len = name.len().min(bytes.len());
         bytes[..len].copy_from_slice(&name[..len]);
         bytes
+    }
+
+    fn completed_quest() -> u8 {
+        QuestLogEntryState::COMPLETED_BIT | QuestLogEntryState::REQUIREMENT_COMPLETED_BIT
+    }
+
+    fn quest_log(entries: &[(QuestLogEntry, u8)]) -> [u8; 41] {
+        let mut quest_bits = [0u8; 41];
+        for (entry, value) in entries {
+            quest_bits[entry.index()] = *value;
+        }
+        quest_bits
     }
 
     fn item_bitstream(
