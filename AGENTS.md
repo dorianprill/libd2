@@ -1,7 +1,6 @@
+# A Diablo 2 library for all game modes: Classic, Lord of Destruction, Resurrected, and Reign of the Warlock
+
 NEVER MODIFY THIS FILE
-
-# A Diablo 2 library for all game modes: Classic, Lord of Destruction, Resurrected, and Reign of the Warlock 
-
 
 This library provides a set of tools and utilities for interacting with the Diablo 2 game server.  
 The immediate goal is to be able to initialize the entire diablo 2 game state from network traffic between the original client and server and use this implement an external quality-of-life tool (no interference with the client's memory) with the following functionality:
