@@ -65,21 +65,21 @@ impl Npc {
 impl Update for Npc {
     fn update(&mut self, _msg: ServerMessage) -> bool {
         // TODO match packets here e.g. MercUpdate etc.
-        return true;
+        true
     }
 }
 
 impl Entity for Npc {
     fn initialized(&self) -> bool {
-        return true;
+        true
     }
 
     fn id(&self) -> u32 {
-        return self.id;
+        self.id
     }
 
     fn location(&self) -> Coordinate {
-        return self.location;
+        self.location
     }
 }
 

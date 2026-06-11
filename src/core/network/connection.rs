@@ -248,6 +248,12 @@ pub struct Connection {
     //packet_queue:   BinaryHeap<RawPacket<'a>>
 }
 
+impl Default for Connection {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Connection {
     pub fn new() -> Self {
         Connection {
@@ -283,15 +289,15 @@ impl Connection {
         let some_if: Option<NetworkInterface> = Some(
             interfaces
                 .into_iter()
-                .find(|ref ifx| {
+                .find(|ifx| {
                     *(ifx.ips.first().unwrap())
                         != IpNetwork::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0).unwrap()
                 })
                 .unwrap(),
         );
 
-        if some_if != None {
-            self.interface = some_if.unwrap();
+        if let Some(iface) = some_if {
+            self.interface = iface;
             println!("Identified network interface {}", self.interface);
         } else {
             println!("No active network adapter found, aborting...");
@@ -365,7 +371,7 @@ impl Connection {
                             fake_ethernet_frame.set_ethertype(EtherTypes::Ipv6);
                             continue;
                         }
-                        fake_ethernet_frame.set_payload(&packet);
+                        fake_ethernet_frame.set_payload(packet);
                         self.handle_ethernet_frame(
                             &interface,
                             &fake_ethernet_frame.to_immutable(),
@@ -612,7 +618,7 @@ impl Connection {
     fn read_legacy_d2gs_tcp_segment<F>(
         &mut self,
         stream_key: TcpStreamKey,
-        tcp_flags: u16,
+        tcp_flags: u8,
         sequence: u32,
         payload: &[u8],
         game_state: &mut GameState,

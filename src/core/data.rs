@@ -289,10 +289,7 @@ impl LanguageTables {
         if index >= PATCH_OFFSET {
             return self.patch.get(index - PATCH_OFFSET);
         }
-        if index >= CLASSIC_OFFSET {
-            return self.classic.get(index - CLASSIC_OFFSET);
-        }
-        None
+        self.classic.get(index - CLASSIC_OFFSET)
     }
 }
 

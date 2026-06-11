@@ -658,7 +658,7 @@ pub fn decrypt_mpq_block_range(
         .checked_add(size)
         .filter(|end| *end <= data.len())
         .is_none()
-        || size % 4 != 0
+        || !size.is_multiple_of(4)
     {
         return Err(MpqError::InvalidDecryptRange { offset, size });
     }
@@ -942,7 +942,7 @@ mod tests {
 
         assert_eq!(data.len(), 61_650);
         assert_eq!(
-            format!("{:x}", Sha256::digest(&data)),
+            Sha256::digest(&data).iter().map(|b| format!("{:02x}", b)).collect::<String>(),
             "3867b6f6bc92c4c2895d9cec970e6e499c2d3a9e647cc43cae4449e695b1a2c8"
         );
     }
@@ -961,7 +961,7 @@ mod tests {
 
         assert_eq!(data.len(), 61_650);
         assert_eq!(
-            format!("{:x}", Sha256::digest(&data)),
+            Sha256::digest(&data).iter().map(|b| format!("{:02x}", b)).collect::<String>(),
             "3867b6f6bc92c4c2895d9cec970e6e499c2d3a9e647cc43cae4449e695b1a2c8"
         );
     }

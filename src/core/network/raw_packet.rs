@@ -2,16 +2,10 @@
 use std::cmp::Ordering;
 
 #[allow(dead_code)]
-#[derive(Eq, Clone, Copy)]
+#[derive(Eq, PartialEq, Clone, Copy)]
 pub enum PacketDirection {
     Receive,
     Send,
-}
-
-impl PartialEq for PacketDirection {
-    fn eq(&self, other: &PacketDirection) -> bool {
-        self == other
-    }
 }
 
 // Must impl Ord trait to use std::collections::BinaryHeap as priority queue

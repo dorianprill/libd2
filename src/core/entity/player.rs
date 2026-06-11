@@ -371,22 +371,22 @@ fn legacy_skill_offset(class: CharacterClass) -> Option<u16> {
 
 impl Entity for Player {
     fn initialized(&self) -> bool {
-        return true;
+        true
     }
 
     fn id(&self) -> u32 {
-        return self.id;
+        self.id
     }
 
     fn location(&self) -> Coordinate {
-        return self.location;
+        self.location
     }
 }
 
 impl Update for Player {
     fn update(&mut self, _msg: ServerMessage) -> bool {
         // TODO match packets here e.g. MercUpdate etc.
-        return true;
+        true
     }
 }
 

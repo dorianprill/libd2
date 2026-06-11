@@ -35,6 +35,12 @@ pub struct D2GSReader {
     compression_enabled: bool,
 }
 
+impl Default for D2GSReader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl D2GSReader {
     pub fn new() -> Self {
         D2GSReader {
@@ -290,8 +296,7 @@ fn packet_size_status(input: &[u8]) -> PacketSizeStatus {
         0x3E => {
             if size >= 2 {
                 let declared_size = input[1] as usize;
-                if declared_size >= 2
-                    && declared_size <= 34
+                if (2..=34).contains(&declared_size)
                     && input.len() >= 34
                     && input
                         .get(declared_size..34)

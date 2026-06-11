@@ -76,6 +76,7 @@ pub struct MapTile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default)]
 pub struct GameMapState {
     pub act: Option<u8>,
     pub map_id: Option<u32>,
@@ -84,17 +85,6 @@ pub struct GameMapState {
     pub revealed_tiles: HashSet<MapTile>,
 }
 
-impl Default for GameMapState {
-    fn default() -> Self {
-        Self {
-            act: None,
-            map_id: None,
-            area_id: None,
-            automap: None,
-            revealed_tiles: HashSet::new(),
-        }
-    }
-}
 
 /// Raw server item-stat update captured from D2GS packet `0x3E`.
 ///
@@ -627,11 +617,10 @@ impl GameState {
     fn current_mercenary_mut(&mut self) -> Option<&mut Mercenary> {
         if let Some(local_player_id) = self.local_player_id {
             let local_player_id = self.resolve_player_id(local_player_id);
-            if let Some(player) = self.players.get(&local_player_id) {
-                if player.has_mercenary() {
+            if let Some(player) = self.players.get(&local_player_id)
+                && player.has_mercenary() {
                     return self.mercenaries.get_mut(&player.mercenary_id());
                 }
-            }
         }
 
         if self.mercenaries.len() == 1 {

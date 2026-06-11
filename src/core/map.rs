@@ -168,32 +168,29 @@ impl MapGenerationRequest {
         self,
         response: MapgenResponse,
     ) -> Result<GeneratedMap, MapGenerationError> {
-        if let Some(seed) = response.seed {
-            if seed != self.generator_seed() as u64 {
+        if let Some(seed) = response.seed
+            && seed != self.generator_seed() as u64 {
                 return Err(MapGenerationError::ResponseSeedMismatch {
                     expected: self.generator_seed(),
                     actual: seed,
                 });
             }
-        }
 
-        if let Some(difficulty) = response.difficulty {
-            if difficulty != self.generator_difficulty() as u64 {
+        if let Some(difficulty) = response.difficulty
+            && difficulty != self.generator_difficulty() as u64 {
                 return Err(MapGenerationError::ResponseDifficultyMismatch {
                     expected: self.generator_difficulty(),
                     actual: difficulty,
                 });
             }
-        }
 
-        if let Some(act) = response.act {
-            if act != -1 && act != self.generator_act() as i64 {
+        if let Some(act) = response.act
+            && act != -1 && act != self.generator_act() as i64 {
                 return Err(MapGenerationError::ResponseActMismatch {
                     expected: self.generator_act(),
                     actual: act,
                 });
             }
-        }
 
         let requested_level = self.generator_level() as u64;
         let Some(level) = response
