@@ -104,7 +104,7 @@ and run it. Then start Diablo II LoD 1.14, join a game, and let the library keep
 `GameState` updated from parsed packets.
 
 ```Rust
-use libd2r::Client;
+use libd2::Client;
 
 fn main() {
     let mut client = Client::new();

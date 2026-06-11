@@ -1,4 +1,4 @@
-# libd2r Report
+# libd2 Report
 
 Last updated: 2026-06-09
 

@@ -1,4 +1,4 @@
-# libd2r Architecture
+# libd2 Architecture
 
 This document captures the current architecture and intended direction of the
 library. It should be updated whenever modules are added, packet flow changes,

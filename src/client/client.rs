@@ -16,6 +16,7 @@ pub enum Status {
     NotInGame,
 }
 
+#[derive(Default)]
 pub struct Client {
     game_state: GameState,
     connection: Connection,
@@ -63,14 +64,6 @@ impl Client {
     }
 }
 
-impl Default for Client {
-    fn default() -> Self {
-        Client {
-            game_state: GameState::default(),
-            connection: Connection::new(),
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
