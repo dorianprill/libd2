@@ -231,8 +231,8 @@ pub enum ServerMessage {
         unknown: u16,
         unknown2: u32,
         chat_type: u8,
-        char_name: [u8; 255], // these are C-Strings but..
-        message: [u8; 255],   // FIXME handle as &String instead?
+        char_name: Box<[u8; 255]>, // these are C-Strings but..
+        message: Box<[u8; 255]>,   // FIXME handle as &String instead?
     } = 0x26,
 
     NpcInfo {
@@ -396,19 +396,19 @@ pub enum ServerMessage {
     /// FIXME conflicting info
     /// bh reports:
     /// "D2GS_QUEST_SPECIAL" : {
-    ///	"PacketId" : "0x50",
-    ///	"Description" : "",
-    ///	"Size" : 15,
-    ///	"Structure" : [
-    ///		{ "BYTE" : "PacketId" },
-    ///		{ "short" : "nMessageType" },
-    ///		{ "short" : "nArg1" },
-    ///		{ "short" : "nArg2" },
-    ///		{ "short" : "nArg3" },
-    ///		{ "short" : "nArg4" },
-    ///		{ "short" : "nArg5" },
-    ///		{ "short" : "nArg6" }
-    ///	]
+    ///    "PacketId" : "0x50",
+    ///    "Description" : "",
+    ///    "Size" : 15,
+    ///    "Structure" : [
+    ///        { "BYTE" : "PacketId" },
+    ///        { "short" : "nMessageType" },
+    ///        { "short" : "nArg1" },
+    ///        { "short" : "nArg2" },
+    ///        { "short" : "nArg3" },
+    ///        { "short" : "nArg4" },
+    ///        { "short" : "nArg5" },
+    ///        { "short" : "nArg6" }
+    ///    ]
     ///},
     StartGame = 0x50,
 
@@ -1018,7 +1018,7 @@ pub enum ServerMessage {
     /// Else just send exit game packets
     WardenRequest {
         stream_size: u16,
-        bitstream: [u8; 254], // { "BYTE" : "Stream[nStreamSize]" } FIXME maximum packet size
+        bitstream: Box<[u8; 254]>, // { "BYTE" : "Stream[nStreamSize]" } FIXME maximum packet size
     } = 0xAE,
 
     /// TODO what are the compression modes

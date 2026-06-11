@@ -19,7 +19,6 @@ use std::path::{Path, PathBuf};
 
 use crate::core::mpq::{MpqArchive, MpqError};
 
-const CLASSIC_OFFSET: usize = 0;
 const PATCH_OFFSET: usize = 10_000;
 const EXPANSION_OFFSET: usize = 20_000;
 
@@ -289,7 +288,7 @@ impl LanguageTables {
         if index >= PATCH_OFFSET {
             return self.patch.get(index - PATCH_OFFSET);
         }
-        self.classic.get(index - CLASSIC_OFFSET)
+        self.classic.get(index)
     }
 }
 
