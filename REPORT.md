@@ -1,6 +1,6 @@
 # libd2 Report
 
-Last updated: 2026-06-09
+Last updated: 2026-06-11
 
 ## Current Status
 
@@ -34,7 +34,7 @@ The crate now resolves dependencies and passes:
 cargo test
 ```
 
-The current suite has 129 unit tests.
+The current suite has 131 unit tests.
 
 ## Work Completed
 
@@ -314,6 +314,11 @@ The current suite has 129 unit tests.
 - Added `PlayerSkillLevels` and wired `0x94` into `GameState`, preserving raw
   global `Skills.txt` ids while projecting class-local skills into the 30-byte
   legacy `.d2s` `if` table for export.
+- Ported the network-rewrite-backup branch's independent parser/state cleanup
+  without taking its network rewrite: missile updates now construct a full
+  `Missile` value before upsert, large chat/warden fixed buffers are boxed in
+  `ServerMessage`, and classic language-table lookup no longer subtracts a
+  zero offset.
 
 ## Current Architecture Summary
 
@@ -418,9 +423,9 @@ MPQ bytes
    especially `ItemStatCost.txt` bit widths and parameter rules.
 3. Expand `ServerMessage::parse` with the next state-relevant variable-length
    packets after checking each layout against multiple resources.
-4. Add state support for missiles, party/relationship data beyond the current
-   `0x75` level update, mercenaries, richer item semantics, and event
-   derivation.
+4. Expand party/relationship data beyond the current `0x75` level update,
+   improve richer missile/mercenary semantics, add richer item semantics, and
+   derive higher-level events.
 5. Create a small LoD 1.14 `d2helper` prototype using the callback API, with an
    egui worker-thread/channel boundary and an automap-style isometric debug
    renderer over `GameState`.
@@ -519,7 +524,7 @@ MPQ bytes
 cargo test
 ```
 
-Result: passed. 110 tests.
+Result: passed. 131 tests.
 
 ```text
 cargo fmt --check

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use crate::core::character_class::CharacterClass;
 use crate::core::coordinate::Coordinate;
 use crate::core::entity::Entity;
 use crate::core::update::Update;
@@ -44,6 +45,8 @@ pub struct Mercenary {
     id: u32,
     class_id: u16,
     owner_id: u32,
+    owner_class: Option<CharacterClass>,
+    owner_name: Option<String>,
     skill_id: u8,
     seed2: u32,
     init_seed: u32,
@@ -68,6 +71,8 @@ impl Mercenary {
             id,
             class_id,
             owner_id,
+            owner_class: None,
+            owner_name: None,
             skill_id,
             seed2,
             init_seed,
@@ -105,6 +110,31 @@ impl Mercenary {
 
     pub fn owner_id(&self) -> u32 {
         self.owner_id
+    }
+
+    pub fn set_owner_id(&mut self, owner_id: u32) {
+        self.owner_id = owner_id;
+    }
+
+    pub fn owner_class(&self) -> Option<CharacterClass> {
+        self.owner_class
+    }
+
+    pub fn owner_name(&self) -> Option<&str> {
+        self.owner_name.as_deref()
+    }
+
+    pub fn set_owner_identity(&mut self, class: CharacterClass, name: impl Into<String>) {
+        self.owner_class = Some(class);
+        self.owner_name = Some(name.into());
+    }
+
+    pub fn owner_matches(&self, class: CharacterClass, name: &str) -> bool {
+        self.owner_class == Some(class)
+            && self
+                .owner_name
+                .as_deref()
+                .is_some_and(|owner_name| owner_name.eq_ignore_ascii_case(name))
     }
 
     pub fn skill_id(&self) -> u8 {

@@ -33,7 +33,8 @@ use crate::core::update::Update;
 
 const LEGACY_D2GS_PORT: u16 = 4000;
 const D2R_BNET_PORT: u16 = 1119;
-const MAX_BUFFERED_D2GS_BYTES: usize = 1024;
+const MAX_BUFFERED_D2GS_BYTES: usize = 16 * 1024;
+const D2GS_DIAGNOSTIC_PREFIX_BYTES: usize = 32;
 
 /// Transport classification for captured Diablo II traffic.
 ///
@@ -81,6 +82,15 @@ fn classify_transport(source_port: u16, destination_port: u16) -> CapturedTransp
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct D2gsBufferSnapshot {
+    pub packet_buffer_len: usize,
+    pub compressed_buffer_len: usize,
+    pub payload_prefix: Vec<u8>,
+    pub packet_buffer_prefix: Vec<u8>,
+    pub compressed_buffer_prefix: Vec<u8>,
+}
+
 /// Non-packet diagnostic emitted by [`Connection`] during live capture.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionTransportWarning {
@@ -122,6 +132,7 @@ pub enum ConnectionTransportWarning {
     BufferedD2gsPayload {
         payload_len: usize,
         buffered_len: usize,
+        snapshot: D2gsBufferSnapshot,
     },
     /// The D2GS byte-stream splitter accumulated too much unread data, so the
     /// buffered framing state was discarded and the latest TCP payload was
@@ -129,6 +140,7 @@ pub enum ConnectionTransportWarning {
     D2gsFramingReset {
         payload_len: usize,
         discarded_len: usize,
+        snapshot: D2gsBufferSnapshot,
     },
 }
 
@@ -678,6 +690,7 @@ impl Connection {
 
         let buffered_len = self.d2gs_reader.buffered_len();
         if !payload.is_empty() && !emitted_packet && buffered_len > buffered_before {
+            let snapshot = self.d2gs_buffer_snapshot(payload);
             if buffered_len >= MAX_BUFFERED_D2GS_BYTES {
                 self.d2gs_reader.reset();
                 on_event(
@@ -685,6 +698,7 @@ impl Connection {
                         warning: ConnectionTransportWarning::D2gsFramingReset {
                             payload_len: payload.len(),
                             discarded_len: buffered_len,
+                            snapshot,
                         },
                     },
                     game_state,
@@ -699,10 +713,29 @@ impl Connection {
                     warning: ConnectionTransportWarning::BufferedD2gsPayload {
                         payload_len: payload.len(),
                         buffered_len,
+                        snapshot,
                     },
                 },
                 game_state,
             );
+        }
+    }
+
+    fn d2gs_buffer_snapshot(&self, payload: &[u8]) -> D2gsBufferSnapshot {
+        D2gsBufferSnapshot {
+            packet_buffer_len: self.d2gs_reader.packet_stream_len(),
+            compressed_buffer_len: self.d2gs_reader.compressed_stream_len(),
+            payload_prefix: payload
+                .iter()
+                .take(D2GS_DIAGNOSTIC_PREFIX_BYTES)
+                .copied()
+                .collect(),
+            packet_buffer_prefix: self
+                .d2gs_reader
+                .packet_stream_prefix(D2GS_DIAGNOSTIC_PREFIX_BYTES),
+            compressed_buffer_prefix: self
+                .d2gs_reader
+                .compressed_stream_prefix(D2GS_DIAGNOSTIC_PREFIX_BYTES),
         }
     }
 }
@@ -741,12 +774,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_transport, CapturedTransport, Connection, ConnectionEvent,
-        ConnectionTransportWarning, D2R_BNET_PORT, LEGACY_D2GS_PORT, MAX_BUFFERED_D2GS_BYTES,
+        CapturedTransport, Connection, ConnectionEvent, ConnectionTransportWarning, D2R_BNET_PORT,
+        LEGACY_D2GS_PORT, MAX_BUFFERED_D2GS_BYTES, classify_transport,
     };
+    use crate::ServerMessage;
     use crate::core::game_state::GameState;
     use crate::core::protocol::server_message::ServerMessageParseError;
-    use crate::ServerMessage;
 
     #[test]
     fn classifies_legacy_d2gs_server_messages_by_source_port() {
@@ -862,11 +895,12 @@ mod tests {
                 warning: ConnectionTransportWarning::BufferedD2gsPayload {
                     payload_len: 3,
                     buffered_len: 3,
+                    ..
                 }
             }
         )));
 
-        let payload = [0x07, 0x70, 0x04, 0x78, 0x03, 0x01].repeat(200);
+        let payload = [0x07, 0x70, 0x04, 0x78, 0x03, 0x01].repeat(MAX_BUFFERED_D2GS_BYTES / 6 + 10);
         let recovery_events = connection.process_d2gs_payload(&payload, &mut state);
 
         assert!(recovery_events.iter().any(|event| matches!(
@@ -875,6 +909,7 @@ mod tests {
                 warning: ConnectionTransportWarning::D2gsFramingReset {
                     payload_len,
                     discarded_len,
+                    ..
                 }
             } if *payload_len == payload.len() && *discarded_len >= MAX_BUFFERED_D2GS_BYTES
         )));
@@ -925,6 +960,7 @@ mod tests {
                     warning: ConnectionTransportWarning::BufferedD2gsPayload {
                         payload_len: 3,
                         buffered_len: 3,
+                        ..
                     }
                 }
             )

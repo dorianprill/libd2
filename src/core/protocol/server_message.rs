@@ -231,8 +231,8 @@ pub enum ServerMessage {
         unknown: u16,
         unknown2: u32,
         chat_type: u8,
-        char_name: [u8; 255], // these are C-Strings but..
-        message: [u8; 255],   // FIXME handle as &String instead?
+        char_name: Box<[u8; 255]>, // these are C-Strings but..
+        message: Box<[u8; 255]>,   // FIXME handle as &String instead?
     } = 0x26,
 
     NpcInfo {
@@ -396,19 +396,19 @@ pub enum ServerMessage {
     /// FIXME conflicting info
     /// bh reports:
     /// "D2GS_QUEST_SPECIAL" : {
-    ///	"PacketId" : "0x50",
-    ///	"Description" : "",
-    ///	"Size" : 15,
-    ///	"Structure" : [
-    ///		{ "BYTE" : "PacketId" },
-    ///		{ "short" : "nMessageType" },
-    ///		{ "short" : "nArg1" },
-    ///		{ "short" : "nArg2" },
-    ///		{ "short" : "nArg3" },
-    ///		{ "short" : "nArg4" },
-    ///		{ "short" : "nArg5" },
-    ///		{ "short" : "nArg6" }
-    ///	]
+    ///    "PacketId" : "0x50",
+    ///    "Description" : "",
+    ///    "Size" : 15,
+    ///    "Structure" : [
+    ///        { "BYTE" : "PacketId" },
+    ///        { "short" : "nMessageType" },
+    ///        { "short" : "nArg1" },
+    ///        { "short" : "nArg2" },
+    ///        { "short" : "nArg3" },
+    ///        { "short" : "nArg4" },
+    ///        { "short" : "nArg5" },
+    ///        { "short" : "nArg6" }
+    ///    ]
     ///},
     StartGame = 0x50,
 
@@ -710,7 +710,7 @@ pub enum ServerMessage {
         unit_type: u8,
         unit_life: u16,
         unit_id: u32,
-        unit_area: u32,
+        unit_area: u16,
     } = 0x7F,
 
     Unused30 = 0x80,
@@ -1018,7 +1018,7 @@ pub enum ServerMessage {
     /// Else just send exit game packets
     WardenRequest {
         stream_size: u16,
-        bitstream: [u8; 254], // { "BYTE" : "Stream[nStreamSize]" } FIXME maximum packet size
+        bitstream: Box<[u8; 254]>, // { "BYTE" : "Stream[nStreamSize]" } FIXME maximum packet size
     } = 0xAE,
 
     /// TODO what are the compression modes
@@ -1604,6 +1604,15 @@ impl ServerMessage {
                     flags: cursor.u32_le(),
                 })
             }
+            0x7F => {
+                let mut cursor = PacketCursor::new(input, 10)?;
+                Ok(Self::AllyPartyInfo {
+                    unit_type: cursor.u8(),
+                    unit_life: cursor.u16_le(),
+                    unit_id: cursor.u32_le(),
+                    unit_area: cursor.u16_le(),
+                })
+            }
             0x8F => {
                 let mut cursor = PacketCursor::new(input, 33)?;
                 Ok(Self::Pong {
@@ -1626,6 +1635,28 @@ impl ServerMessage {
                     merc_id: cursor.u32_le(),
                     seed2: cursor.u32_le(),
                     init_seed: cursor.u32_le(),
+                })
+            }
+            0x8B => {
+                let mut cursor = PacketCursor::new(input, 6)?;
+                Ok(Self::PlayerPartyUpdate {
+                    unit_id: cursor.u32_le(),
+                    party_state: cursor.u8(),
+                })
+            }
+            0x8C => {
+                let mut cursor = PacketCursor::new(input, 11)?;
+                Ok(Self::PlayerRelationUpdate {
+                    player1_id: cursor.u32_le(),
+                    player2_id: cursor.u32_le(),
+                    relationship: cursor.u16_le(),
+                })
+            }
+            0x8D => {
+                let mut cursor = PacketCursor::new(input, 7)?;
+                Ok(Self::AssignPlayerToParty {
+                    player_id: cursor.u32_le(),
+                    party_id: cursor.u16_le(),
                 })
             }
             0x90 => {
@@ -2271,6 +2302,17 @@ mod tests {
     #[test]
     fn parse_merc_packets_read_assignment_and_stat_updates() {
         assert_eq!(
+            ServerMessage::parse(&[0x7F, 0x00, 0x64, 0x00, 0x44, 0x33, 0x22, 0x11, 0x02, 0x00])
+                .expect("ally party info should parse"),
+            ServerMessage::AllyPartyInfo {
+                unit_type: 0,
+                unit_life: 100,
+                unit_id: 0x1122_3344,
+                unit_area: 2,
+            }
+        );
+
+        assert_eq!(
             ServerMessage::parse(&[
                 0x81, 0x0A, 0x52, 0x01, 0x44, 0x33, 0x22, 0x11, 0x88, 0x77, 0x66, 0x55, 0xCC, 0xBB,
                 0xAA, 0x99, 0x00, 0xFF, 0xEE, 0xDD,
@@ -2428,6 +2470,36 @@ mod tests {
                 character_level: 88,
                 relationship: 0,
                 in_party: 1,
+            }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[0x8B, 0x6D, 0x13, 0x9C, 0x41, 0x01])
+                .expect("player party update should parse"),
+            ServerMessage::PlayerPartyUpdate {
+                unit_id: 0x419C_136D,
+                party_state: 1,
+            }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[
+                0x8C, 0x6D, 0x13, 0x9C, 0x41, 0xEF, 0xBE, 0xAD, 0xDE, 0x02, 0x00,
+            ])
+            .expect("player relation update should parse"),
+            ServerMessage::PlayerRelationUpdate {
+                player1_id: 0x419C_136D,
+                player2_id: 0xDEAD_BEEF,
+                relationship: 2,
+            }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[0x8D, 0x6D, 0x13, 0x9C, 0x41, 0x34, 0x12])
+                .expect("assign player to party should parse"),
+            ServerMessage::AssignPlayerToParty {
+                player_id: 0x419C_136D,
+                party_id: 0x1234,
             }
         );
 

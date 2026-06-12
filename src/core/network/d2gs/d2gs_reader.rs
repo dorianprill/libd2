@@ -77,6 +77,22 @@ impl D2GSReader {
         self.packet_stream.len() + self.compressed_stream.len()
     }
 
+    pub fn packet_stream_len(&self) -> usize {
+        self.packet_stream.len()
+    }
+
+    pub fn compressed_stream_len(&self) -> usize {
+        self.compressed_stream.len()
+    }
+
+    pub fn packet_stream_prefix(&self, limit: usize) -> Vec<u8> {
+        self.packet_stream.iter().take(limit).copied().collect()
+    }
+
+    pub fn compressed_stream_prefix(&self, limit: usize) -> Vec<u8> {
+        self.compressed_stream.iter().take(limit).copied().collect()
+    }
+
     /// Normalizes a captured legacy D2GS payload into individual game packets.
     ///
     /// Live packet capture sees TCP payloads, not semantic D2GS messages. One
@@ -335,7 +351,7 @@ fn positive_size(size: i32) -> PacketSizeStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::{get_packet_size, D2GSReader};
+    use super::{D2GSReader, get_packet_size};
 
     fn drain_packet_lengths(reader: &mut D2GSReader) -> Vec<usize> {
         let mut lengths = Vec::new();
