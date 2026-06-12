@@ -1033,8 +1033,12 @@ impl Update for GameState {
     fn update(&mut self, packet: ServerMessage) -> bool {
         match packet {
             ServerMessage::GameLoading => {
-                self.reset_session();
-                true
+                if self.local_player_id.is_some() {
+                    false
+                } else {
+                    self.reset_session();
+                    true
+                }
             }
             ServerMessage::GameFlags {
                 difficulty,
@@ -2068,6 +2072,26 @@ mod tests {
         assert!(state.players().is_empty());
         assert_eq!(state.local_player_id(), None);
         assert!(state.map().revealed_tiles.is_empty());
+    }
+
+    #[test]
+    fn duplicate_game_loading_does_not_clear_active_session() {
+        let mut state = GameState::default();
+        assert!(state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: 1,
+            szname: name16("Local"),
+            x: 10,
+            y: 20,
+        }));
+        mark_local(&mut state, 7);
+        assert_eq!(state.players().len(), 1);
+
+        assert!(!state.update(ServerMessage::GameLoading));
+
+        assert_eq!(state.players().len(), 1);
+        assert_eq!(state.local_player_id(), Some(7));
+        assert!(state.player(7).is_some());
     }
 
     #[test]
