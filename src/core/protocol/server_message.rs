@@ -1637,6 +1637,28 @@ impl ServerMessage {
                     init_seed: cursor.u32_le(),
                 })
             }
+            0x8B => {
+                let mut cursor = PacketCursor::new(input, 6)?;
+                Ok(Self::PlayerPartyUpdate {
+                    unit_id: cursor.u32_le(),
+                    party_state: cursor.u8(),
+                })
+            }
+            0x8C => {
+                let mut cursor = PacketCursor::new(input, 11)?;
+                Ok(Self::PlayerRelationUpdate {
+                    player1_id: cursor.u32_le(),
+                    player2_id: cursor.u32_le(),
+                    relationship: cursor.u16_le(),
+                })
+            }
+            0x8D => {
+                let mut cursor = PacketCursor::new(input, 7)?;
+                Ok(Self::AssignPlayerToParty {
+                    player_id: cursor.u32_le(),
+                    party_id: cursor.u16_le(),
+                })
+            }
             0x90 => {
                 let mut cursor = PacketCursor::new(input, 13)?;
                 Ok(Self::PlayerMapUpdate {
@@ -2448,6 +2470,36 @@ mod tests {
                 character_level: 88,
                 relationship: 0,
                 in_party: 1,
+            }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[0x8B, 0x6D, 0x13, 0x9C, 0x41, 0x01])
+                .expect("player party update should parse"),
+            ServerMessage::PlayerPartyUpdate {
+                unit_id: 0x419C_136D,
+                party_state: 1,
+            }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[
+                0x8C, 0x6D, 0x13, 0x9C, 0x41, 0xEF, 0xBE, 0xAD, 0xDE, 0x02, 0x00,
+            ])
+            .expect("player relation update should parse"),
+            ServerMessage::PlayerRelationUpdate {
+                player1_id: 0x419C_136D,
+                player2_id: 0xDEAD_BEEF,
+                relationship: 2,
+            }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[0x8D, 0x6D, 0x13, 0x9C, 0x41, 0x34, 0x12])
+                .expect("assign player to party should parse"),
+            ServerMessage::AssignPlayerToParty {
+                player_id: 0x419C_136D,
+                party_id: 0x1234,
             }
         );
 

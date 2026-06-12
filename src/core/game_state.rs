@@ -1,20 +1,22 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::ServerMessage;
 use crate::core::character_class::CharacterClass;
 use crate::core::coordinate::Coordinate;
+use crate::core::entity::Entity;
 use crate::core::entity::mercenary::Mercenary;
 use crate::core::entity::missile::Missile;
 use crate::core::entity::npc::Npc;
-use crate::core::entity::player::{Player, PlayerMovement, PlayerVitals};
-use crate::core::entity::Entity;
+use crate::core::entity::player::{
+    PartyAffiliation, PartyLifeFraction, Player, PlayerMovement, PlayerVitals, RemotePartyInfo,
+};
 use crate::core::network::d2gs::D2GSPacket;
-use crate::core::object::item::{Item, ItemStateFlags};
 use crate::core::object::WorldObject;
+use crate::core::object::item::{Item, ItemStateFlags};
 use crate::core::protocol::server_message::{ServerMessageParseError, SkillDescription};
 use crate::core::quest::PlayerQuestLog;
 use crate::core::unit_stat::UnitStat;
 use crate::core::update::Update;
-use crate::ServerMessage;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GameServerType {
@@ -76,8 +78,7 @@ pub struct MapTile {
     pub area_id: u8,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GameMapState {
     pub act: Option<u8>,
     pub map_id: Option<u32>,
@@ -208,7 +209,8 @@ pub struct GameState {
     /// pulses, and movement/stat updates all hit the same canonical [`Player`].
     pub(crate) player_aliases: HashMap<u32, u32>,
     pub(crate) pending_player_stats: HashMap<u32, HashMap<u16, u32>>,
-    pub(crate) pending_player_areas: HashMap<u32, u16>,
+    pub(crate) pending_player_parties: HashMap<u32, PartyAffiliation>,
+    pub(crate) pending_remote_party_info: HashMap<u32, RemotePartyInfo>,
     pub(crate) npcs: HashMap<u32, Npc>,
     pub(crate) mercenaries: HashMap<u32, Mercenary>,
     pub(crate) missiles: HashMap<u32, Missile>,
@@ -234,7 +236,8 @@ impl GameState {
             players: HashMap::with_capacity(8),
             player_aliases: HashMap::with_capacity(8),
             pending_player_stats: HashMap::with_capacity(8),
-            pending_player_areas: HashMap::with_capacity(8),
+            pending_player_parties: HashMap::with_capacity(8),
+            pending_remote_party_info: HashMap::with_capacity(8),
             npcs: HashMap::with_capacity(1024),
             mercenaries: HashMap::with_capacity(8),
             missiles: HashMap::with_capacity(256),
@@ -421,17 +424,52 @@ impl GameState {
             }
         }
 
-        let mut pending_area = self.pending_player_areas.remove(&unit_id);
+        let mut pending_party = self.pending_player_parties.remove(&unit_id);
         if unit_id != canonical_id {
-            pending_area = self.pending_player_areas.remove(&canonical_id).or(pending_area);
+            pending_party = self
+                .pending_player_parties
+                .remove(&canonical_id)
+                .or(pending_party);
         }
-        if let Some(area_id) = pending_area {
+        if let Some(party_affiliation) = pending_party {
             if let Some(player) = self.players.get_mut(&canonical_id) {
-                player.set_area_id(area_id);
+                player.set_party_affiliation(party_affiliation);
             } else {
-                self.pending_player_areas.insert(canonical_id, area_id);
+                self.pending_player_parties
+                    .insert(canonical_id, party_affiliation);
             }
         }
+
+        let mut pending_remote_party_info = self.pending_remote_party_info.remove(&unit_id);
+        if unit_id != canonical_id {
+            pending_remote_party_info = self
+                .pending_remote_party_info
+                .remove(&canonical_id)
+                .or(pending_remote_party_info);
+        }
+        if let Some(remote_party_info) = pending_remote_party_info {
+            if let Some(player) = self.players.get_mut(&canonical_id) {
+                player.set_remote_party_info(remote_party_info);
+            } else {
+                self.pending_remote_party_info
+                    .insert(canonical_id, remote_party_info);
+            }
+        }
+    }
+
+    fn set_player_party_affiliation(
+        &mut self,
+        player_id: u32,
+        party_affiliation: PartyAffiliation,
+    ) -> bool {
+        let player_id = self.resolve_player_id(player_id);
+        if let Some(player) = self.players.get_mut(&player_id) {
+            player.set_party_affiliation(party_affiliation);
+        } else {
+            self.pending_player_parties
+                .insert(player_id, party_affiliation);
+        }
+        true
     }
 
     fn update_ally_party_info(
@@ -443,20 +481,20 @@ impl GameState {
     ) -> bool {
         match unit_type {
             0x00 => {
+                let Some(life) = PartyLifeFraction::from_packet_value(unit_life) else {
+                    return false;
+                };
                 let unit_id = self.resolve_player_id(unit_id);
-                self.set_player_stat(unit_id, UnitStat::Life as u16, unit_life as u32);
                 if let Some(player) = self.players.get_mut(&unit_id) {
-                    player.set_area_id(unit_area);
-                    if player.stat(UnitStat::LifeMax as u16).is_none() {
-                        player.set_stat(UnitStat::LifeMax as u16, 100);
-                    }
+                    player.set_remote_party_life(life);
+                    player.set_remote_party_area_id(unit_area);
                 } else {
-                    self.pending_player_areas.insert(unit_id, unit_area);
-                    self.pending_player_stats
+                    let pending = self
+                        .pending_remote_party_info
                         .entry(unit_id)
-                        .or_default()
-                        .entry(UnitStat::LifeMax as u16)
-                        .or_insert(100);
+                        .or_insert_with(RemotePartyInfo::default);
+                    pending.set_life(life);
+                    pending.set_area_id(unit_area);
                 }
                 true
             }
@@ -555,6 +593,7 @@ impl GameState {
         class: CharacterClass,
         name: impl Into<String>,
         level: u32,
+        party_affiliation: PartyAffiliation,
     ) {
         let name = name.into();
         let canonical_id = self.resolve_player_id(player_id);
@@ -562,6 +601,7 @@ impl GameState {
             player.set_class(class);
             player.set_name(name.clone());
             player.set_level(level);
+            player.set_party_affiliation(party_affiliation);
             self.apply_pending_player_stats(player_id, canonical_id);
             self.reattach_mercenaries_by_owner_identity(canonical_id, class, &name);
             return;
@@ -575,6 +615,7 @@ impl GameState {
                 player.set_class(class);
                 player.set_name(name.clone());
                 player.set_level(level);
+                player.set_party_affiliation(party_affiliation);
             }
             self.apply_pending_player_stats(player_id, existing_id);
             self.reattach_mercenaries_by_owner_identity(existing_id, class, &name);
@@ -583,6 +624,7 @@ impl GameState {
 
         let mut player = Player::new_roster(player_id, class, name.clone());
         player.set_level(level);
+        player.set_party_affiliation(party_affiliation);
         self.players.insert(player_id, player);
         self.apply_pending_player_stats(player_id, player_id);
         self.reattach_mercenaries_by_owner_identity(player_id, class, &name);
@@ -906,7 +948,9 @@ impl GameState {
         });
         self.pending_player_stats
             .retain(|pending_id, _| *pending_id != unit_id && *pending_id != canonical_id);
-        self.pending_player_areas
+        self.pending_player_parties
+            .retain(|pending_id, _| *pending_id != unit_id && *pending_id != canonical_id);
+        self.pending_remote_party_info
             .retain(|pending_id, _| *pending_id != unit_id && *pending_id != canonical_id);
 
         if local_removed {
@@ -959,7 +1003,8 @@ impl GameState {
         self.players.clear();
         self.player_aliases.clear();
         self.pending_player_stats.clear();
-        self.pending_player_areas.clear();
+        self.pending_player_parties.clear();
+        self.pending_remote_party_info.clear();
         self.npcs.clear();
         self.mercenaries.clear();
         self.missiles.clear();
@@ -1125,6 +1170,7 @@ impl Update for GameState {
                 character_class,
                 character_name,
                 character_level,
+                party_id,
                 ..
             } => {
                 let Some(class) = CharacterClass::from_id(character_class) else {
@@ -1135,21 +1181,30 @@ impl Update for GameState {
                     class,
                     fixed_c_string(&character_name),
                     character_level as u32,
+                    PartyAffiliation::from_packet_id(party_id),
                 );
                 true
             }
             ServerMessage::PlayerLeft { player_id } => self.remove_player(player_id),
             ServerMessage::PlayerPartyInfo {
                 unit_id,
+                party_id,
                 character_level,
                 ..
             } => {
                 let unit_id = self.resolve_player_id(unit_id);
                 if let Some(player) = self.players.get_mut(&unit_id) {
                     player.set_level(character_level as u32);
+                    player.set_party_id(party_id);
                     true
                 } else {
-                    false
+                    self.pending_player_stats
+                        .entry(unit_id)
+                        .or_default()
+                        .insert(UnitStat::Level as u16, character_level as u32);
+                    self.pending_player_parties
+                        .insert(unit_id, PartyAffiliation::from_packet_id(party_id));
+                    true
                 }
             }
             ServerMessage::AllyPartyInfo {
@@ -1172,6 +1227,23 @@ impl Update for GameState {
             ServerMessage::PlayerSkillsInfo {
                 player_id, skills, ..
             } => self.set_player_skills(player_id, skills),
+            ServerMessage::PlayerPartyUpdate {
+                unit_id,
+                party_state,
+            } => {
+                if party_state == 0 {
+                    self.set_player_party_affiliation(unit_id, PartyAffiliation::Unpartied)
+                } else {
+                    true
+                }
+            }
+            ServerMessage::AssignPlayerToParty {
+                player_id,
+                party_id,
+            } => self.set_player_party_affiliation(
+                player_id,
+                PartyAffiliation::from_packet_id(party_id),
+            ),
             ServerMessage::MissileData {
                 missile_id,
                 missile_class,
@@ -1569,7 +1641,7 @@ mod tests {
     use crate::core::update::Update;
     use crate::{
         CharacterClass, Coordinate, Difficulty, GameState, ItemDestination, ItemOwner,
-        ItemPlacement, ServerMessage, SkillDescription,
+        ItemPlacement, PartyAffiliation, PartyId, ServerMessage, SkillDescription,
     };
 
     #[test]
@@ -1682,6 +1754,40 @@ mod tests {
 
         let player = state.player(7).expect("player exists");
         assert_eq!(player.level(), 88);
+        assert_eq!(player.party_affiliation(), PartyAffiliation::Unpartied);
+    }
+
+    #[test]
+    fn party_assignment_packets_update_player_affiliation() {
+        let mut state = GameState::default();
+        assert!(state.update(ServerMessage::PlayerJoined {
+            packet_length: 36,
+            player_id: 7,
+            character_class: 3,
+            character_name: name16("Remote"),
+            character_level: 42,
+            party_id: 0xffff,
+            unknown: [0; 8],
+        }));
+
+        assert!(state.update(ServerMessage::AssignPlayerToParty {
+            player_id: 7,
+            party_id: 0x1234,
+        }));
+
+        let player = state.player(7).expect("player exists");
+        assert_eq!(
+            player.party_affiliation(),
+            PartyAffiliation::Party(PartyId::new(0x1234))
+        );
+
+        assert!(state.update(ServerMessage::PlayerPartyUpdate {
+            unit_id: 7,
+            party_state: 0,
+        }));
+
+        let player = state.player(7).expect("player exists");
+        assert_eq!(player.party_affiliation(), PartyAffiliation::Unpartied);
     }
 
     #[test]
@@ -1766,9 +1872,14 @@ mod tests {
         }));
 
         let player = state.player(0x1000).expect("remote player exists");
-        assert_eq!(player.stat(UnitStat::Life as u16), Some(87));
-        assert_eq!(player.stat(UnitStat::LifeMax as u16), Some(100));
-        assert_eq!(player.area_id(), Some(2));
+        let remote_party_info = player
+            .remote_party_info()
+            .expect("party info should be tracked separately");
+        assert_eq!(remote_party_info.life().map(|life| life.raw()), Some(87));
+        assert_eq!(remote_party_info.area_id(), Some(2));
+        assert_eq!(player.stat(UnitStat::Life as u16), None);
+        assert_eq!(player.stat(UnitStat::LifeMax as u16), None);
+        assert_eq!(player.area_id(), None);
     }
 
     #[test]
@@ -1792,9 +1903,14 @@ mod tests {
         }));
 
         let player = state.player(0x1000).expect("remote player exists");
-        assert_eq!(player.stat(UnitStat::Life as u16), Some(87));
-        assert_eq!(player.stat(UnitStat::LifeMax as u16), Some(100));
-        assert_eq!(player.area_id(), Some(2));
+        let remote_party_info = player
+            .remote_party_info()
+            .expect("party info should be tracked separately");
+        assert_eq!(remote_party_info.life().map(|life| life.raw()), Some(87));
+        assert_eq!(remote_party_info.area_id(), Some(2));
+        assert_eq!(player.stat(UnitStat::Life as u16), None);
+        assert_eq!(player.stat(UnitStat::LifeMax as u16), None);
+        assert_eq!(player.area_id(), None);
     }
 
     #[test]

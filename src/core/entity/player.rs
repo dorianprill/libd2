@@ -2,12 +2,12 @@
 
 use std::collections::HashMap;
 
+use crate::ServerMessage;
 use crate::core::character_class::CharacterClass;
 use crate::core::coordinate::Coordinate;
 use crate::core::entity::Entity;
 use crate::core::unit_stat::UnitStat;
 use crate::core::update::Update;
-use crate::ServerMessage;
 
 /// Current local-player resource values decoded from D2GS HP/MP packets.
 ///
@@ -164,6 +164,95 @@ impl PlayerSkillLevels {
     }
 }
 
+const UNPARTIED_PACKET_ID: u16 = 0xFFFF;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PartyId(u16);
+
+impl PartyId {
+    pub const fn new(raw: u16) -> Self {
+        Self(raw)
+    }
+
+    pub const fn raw(self) -> u16 {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum PartyAffiliation {
+    #[default]
+    Unknown,
+    Unpartied,
+    Party(PartyId),
+}
+
+impl PartyAffiliation {
+    pub const fn from_packet_id(party_id: u16) -> Self {
+        if party_id == UNPARTIED_PACKET_ID {
+            Self::Unpartied
+        } else {
+            Self::Party(PartyId::new(party_id))
+        }
+    }
+
+    pub const fn party_id(self) -> Option<PartyId> {
+        match self {
+            Self::Party(party_id) => Some(party_id),
+            Self::Unknown | Self::Unpartied => None,
+        }
+    }
+
+    pub const fn is_partied(self) -> bool {
+        matches!(self, Self::Party(_))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PartyLifeFraction {
+    raw: u8,
+}
+
+impl PartyLifeFraction {
+    pub const SCALE: u8 = 128;
+
+    pub fn from_packet_value(value: u16) -> Option<Self> {
+        (value <= Self::SCALE as u16).then_some(Self { raw: value as u8 })
+    }
+
+    pub const fn raw(self) -> u8 {
+        self.raw
+    }
+
+    pub fn percent_rounded(self) -> u8 {
+        (((self.raw as u16) * 100 + (Self::SCALE as u16 / 2)) / Self::SCALE as u16) as u8
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RemotePartyInfo {
+    life: Option<PartyLifeFraction>,
+    area_id: Option<u16>,
+}
+
+impl RemotePartyInfo {
+    pub const fn life(self) -> Option<PartyLifeFraction> {
+        self.life
+    }
+
+    pub const fn area_id(self) -> Option<u16> {
+        self.area_id
+    }
+
+    pub fn set_life(&mut self, life: PartyLifeFraction) {
+        self.life = Some(life);
+    }
+
+    pub fn set_area_id(&mut self, area_id: u16) {
+        self.area_id = Some(area_id);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Player {
     class: CharacterClass,
@@ -181,6 +270,8 @@ pub struct Player {
     movement: Option<PlayerMovement>,
     world_location_known: bool,
     area_id: Option<u16>,
+    party_affiliation: PartyAffiliation,
+    remote_party_info: Option<RemotePartyInfo>,
     // TODO
     // stash:       Container;
     // cube:        Container;
@@ -210,6 +301,8 @@ impl Player {
             movement: None,
             world_location_known: true,
             area_id: None,
+            party_affiliation: PartyAffiliation::Unknown,
+            remote_party_info: None,
         }
     }
 
@@ -268,6 +361,38 @@ impl Player {
 
     pub fn set_area_id(&mut self, area_id: u16) {
         self.area_id = Some(area_id);
+    }
+
+    pub fn party_affiliation(&self) -> PartyAffiliation {
+        self.party_affiliation
+    }
+
+    pub fn set_party_affiliation(&mut self, party_affiliation: PartyAffiliation) {
+        self.party_affiliation = party_affiliation;
+    }
+
+    pub fn set_party_id(&mut self, party_id: u16) {
+        self.set_party_affiliation(PartyAffiliation::from_packet_id(party_id));
+    }
+
+    pub fn remote_party_info(&self) -> Option<RemotePartyInfo> {
+        self.remote_party_info
+    }
+
+    pub fn set_remote_party_life(&mut self, life: PartyLifeFraction) {
+        self.remote_party_info
+            .get_or_insert_with(RemotePartyInfo::default)
+            .set_life(life);
+    }
+
+    pub fn set_remote_party_area_id(&mut self, area_id: u16) {
+        self.remote_party_info
+            .get_or_insert_with(RemotePartyInfo::default)
+            .set_area_id(area_id);
+    }
+
+    pub fn set_remote_party_info(&mut self, remote_party_info: RemotePartyInfo) {
+        self.remote_party_info = Some(remote_party_info);
     }
 
     pub fn vitals(&self) -> Option<PlayerVitals> {
