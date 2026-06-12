@@ -1,24 +1,21 @@
 extern crate pnet;
 
-#[cfg(target_os = "windows")]
 use pnet::ipnetwork::IpNetwork;
 
 //use self::pnet::packet::ethernet::Ethernet;
 use self::pnet::datalink::{self, NetworkInterface};
+use self::pnet::packet::Packet;
 use self::pnet::packet::ethernet::{EtherTypes, EthernetPacket, MutableEthernetPacket};
 use self::pnet::packet::ip::{IpNextHeaderProtocol, IpNextHeaderProtocols};
 use self::pnet::packet::ipv4::Ipv4Packet;
 use self::pnet::packet::ipv6::Ipv6Packet;
 use self::pnet::packet::tcp::{TcpFlags, TcpPacket};
 use self::pnet::packet::udp::UdpPacket;
-use self::pnet::packet::Packet;
 use self::pnet::util::MacAddr;
 
 //use std::env;
 //use std::io::{self, Write};
-use std::net::IpAddr;
-#[cfg(target_os = "windows")]
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr, UdpSocket};
 use std::process;
 use std::str;
 
@@ -27,14 +24,21 @@ use std::str;
 use crate::core::game_state::GameState;
 use crate::core::network::d2gs::{D2GSPacket, D2GSReader};
 use crate::core::network::tcp_stream::{TcpReassemblyEvent, TcpStreamReassembler};
-use crate::core::protocol::server_message::ServerMessageParseError;
 use crate::core::protocol::ServerMessage;
+use crate::core::protocol::server_message::ServerMessageParseError;
 use crate::core::update::Update;
 
 const LEGACY_D2GS_PORT: u16 = 4000;
 const D2R_BNET_PORT: u16 = 1119;
 const MAX_BUFFERED_D2GS_BYTES: usize = 16 * 1024;
 const D2GS_DIAGNOSTIC_PREFIX_BYTES: usize = 32;
+const CAPTURE_READ_BUFFER_SIZE: usize = 4 * 1024 * 1024;
+
+const ROUTE_PROBE_TARGETS: &[(Ipv4Addr, u16)] = &[
+    (Ipv4Addr::new(1, 1, 1, 1), 443),
+    (Ipv4Addr::new(8, 8, 8, 8), 443),
+    (Ipv4Addr::new(9, 9, 9, 9), 443),
+];
 
 /// Transport classification for captured Diablo II traffic.
 ///
@@ -86,9 +90,22 @@ fn classify_transport(source_port: u16, destination_port: u16) -> CapturedTransp
 pub struct D2gsBufferSnapshot {
     pub packet_buffer_len: usize,
     pub compressed_buffer_len: usize,
+    pub compression_enabled: bool,
     pub payload_prefix: Vec<u8>,
     pub packet_buffer_prefix: Vec<u8>,
     pub compressed_buffer_prefix: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CaptureInterfaceSelectionReason {
+    RouteProbe { local_ip: IpAddr },
+    Fallback,
+}
+
+#[derive(Debug, Clone)]
+pub struct CaptureInterfaceSelection {
+    pub interface: NetworkInterface,
+    pub reason: CaptureInterfaceSelectionReason,
 }
 
 /// Non-packet diagnostic emitted by [`Connection`] during live capture.
@@ -127,6 +144,16 @@ pub enum ConnectionTransportWarning {
         expected_sequence: u32,
         buffered_segments: usize,
         buffered_bytes: usize,
+    },
+    /// A TCP gap stayed open past the passive-capture recovery window, so the
+    /// D2GS reader was reset and capture resumed at a later sequence.
+    TcpGapTimeoutReset {
+        sequence: u32,
+        len: usize,
+        expected_sequence: u32,
+        buffered_segments: usize,
+        buffered_bytes: usize,
+        elapsed_millis: u128,
     },
     /// A payload reached the D2GS reader but did not yet complete a D2GS packet.
     BufferedD2gsPayload {
@@ -196,6 +223,21 @@ impl From<TcpReassemblyEvent> for ConnectionTransportWarning {
                 buffered_segments,
                 buffered_bytes,
             },
+            TcpReassemblyEvent::GapTimeoutReset {
+                sequence,
+                len,
+                expected_sequence,
+                buffered_segments,
+                buffered_bytes,
+                elapsed_millis,
+            } => Self::TcpGapTimeoutReset {
+                sequence,
+                len,
+                expected_sequence,
+                buffered_segments,
+                buffered_bytes,
+                elapsed_millis,
+            },
         }
     }
 }
@@ -235,6 +277,77 @@ impl ConnectionEvent {
     pub fn packet_id(&self) -> Option<u8> {
         self.packet().map(D2GSPacket::packet_id)
     }
+}
+
+pub fn select_capture_interface(
+    interfaces: &[NetworkInterface],
+) -> Option<CaptureInterfaceSelection> {
+    select_capture_interface_for_route_ip(interfaces, route_probe_local_ip())
+}
+
+pub fn route_probe_local_ip() -> Option<IpAddr> {
+    for &(target, port) in ROUTE_PROBE_TARGETS {
+        let Ok(socket) = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)) else {
+            continue;
+        };
+        if socket.connect((target, port)).is_err() {
+            continue;
+        }
+        let Ok(local_addr) = socket.local_addr() else {
+            continue;
+        };
+        let local_ip = local_addr.ip();
+        if !local_ip.is_unspecified() {
+            return Some(local_ip);
+        }
+    }
+    None
+}
+
+fn select_capture_interface_for_route_ip(
+    interfaces: &[NetworkInterface],
+    route_ip: Option<IpAddr>,
+) -> Option<CaptureInterfaceSelection> {
+    if let Some(local_ip) = route_ip {
+        if let Some(interface) = interfaces
+            .iter()
+            .find(|interface| interface_has_ip(interface, local_ip) && !interface.is_loopback())
+        {
+            return Some(CaptureInterfaceSelection {
+                interface: interface.clone(),
+                reason: CaptureInterfaceSelectionReason::RouteProbe { local_ip },
+            });
+        }
+    }
+
+    interfaces
+        .iter()
+        .find(|interface| fallback_capture_candidate(interface))
+        .cloned()
+        .map(|interface| CaptureInterfaceSelection {
+            interface,
+            reason: CaptureInterfaceSelectionReason::Fallback,
+        })
+}
+
+fn interface_has_ip(interface: &NetworkInterface, ip: IpAddr) -> bool {
+    interface
+        .ips
+        .iter()
+        .any(|network| network.ip() == ip && usable_interface_ip(network))
+}
+
+fn fallback_capture_candidate(interface: &NetworkInterface) -> bool {
+    if interface.is_loopback() || !interface.ips.iter().any(usable_interface_ip) {
+        return false;
+    }
+
+    cfg!(target_os = "windows") || interface.is_up()
+}
+
+fn usable_interface_ip(network: &IpNetwork) -> bool {
+    let ip = network.ip();
+    !ip.is_unspecified() && !ip.is_loopback()
 }
 
 // There are three different connections involved:
@@ -278,39 +391,18 @@ impl Connection {
     }
 
     pub fn init(&mut self) {
-        // Find the first network interface connected to the internet
-        // FIXME this only works on linux, for windows discerning whether an
-        // interface has an internet connection is not possible with libpnet
-        // maybe use
-        // https://microsoft.github.io/windows-docs-rs/doc/windows/Networking/Connectivity/struct.ConnectionProfile.html#method.GetNetworkConnectivityLevel
         let interfaces = datalink::interfaces();
-        // linux/MacOs: should be easy to find an internet connected interface.
-        // TODO how to ensure it is the default iprouted one?
-        #[cfg(not(target_os = "windows"))]
-        let some_if: Option<NetworkInterface> = Some(
-            interfaces
-                .into_iter()
-                .find(|ref ifx| ifx.is_up() && !ifx.is_loopback() && !ifx.ips.is_empty())
-                .unwrap(),
-        );
-        // windows: libpnet is not really helpful on windows as is_up() is always false.
-        // additionally, there is no way to tell between a regular interface and a
-        // disconnected interface with an ip (e.g. virtual adapter for VPN)
-        // for use on windows, you should disable all devices that are not in use even if they are not connected.
-        #[cfg(target_os = "windows")]
-        let some_if: Option<NetworkInterface> = Some(
-            interfaces
-                .into_iter()
-                .find(|ifx| {
-                    *(ifx.ips.first().unwrap())
-                        != IpNetwork::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0).unwrap()
-                })
-                .unwrap(),
-        );
-
-        if let Some(iface) = some_if {
-            self.interface = iface;
-            println!("Identified network interface {}", self.interface);
+        if let Some(selection) = select_capture_interface(&interfaces) {
+            self.interface = selection.interface;
+            match selection.reason {
+                CaptureInterfaceSelectionReason::RouteProbe { local_ip } => println!(
+                    "Identified network interface {} from routed local address {}",
+                    self.interface, local_ip
+                ),
+                CaptureInterfaceSelectionReason::Fallback => {
+                    println!("Identified fallback network interface {}", self.interface)
+                }
+            }
         } else {
             println!("No active network adapter found, aborting...");
             process::exit(1);
@@ -344,6 +436,7 @@ impl Connection {
             return;
         }
         let capture_config = datalink::Config {
+            read_buffer_size: CAPTURE_READ_BUFFER_SIZE,
             // We only need packets addressed to/from the local Diablo II client.
             // Promiscuous mode is unnecessary for that use case and can fail on
             // some Linux wireless drivers with ENODEV during PACKET_ADD_MEMBERSHIP.
@@ -656,7 +749,7 @@ impl Connection {
 
         let result = self.d2gs_tcp_stream.push(sequence, payload);
         if result.reset_required() {
-            self.d2gs_reader.reset();
+            self.d2gs_reader.reset_framing();
         }
 
         for event in result.events() {
@@ -692,7 +785,7 @@ impl Connection {
         if !payload.is_empty() && !emitted_packet && buffered_len > buffered_before {
             let snapshot = self.d2gs_buffer_snapshot(payload);
             if buffered_len >= MAX_BUFFERED_D2GS_BYTES {
-                self.d2gs_reader.reset();
+                self.d2gs_reader.reset_framing();
                 on_event(
                     ConnectionEvent::TransportWarning {
                         warning: ConnectionTransportWarning::D2gsFramingReset {
@@ -725,6 +818,7 @@ impl Connection {
         D2gsBufferSnapshot {
             packet_buffer_len: self.d2gs_reader.packet_stream_len(),
             compressed_buffer_len: self.d2gs_reader.compressed_stream_len(),
+            compression_enabled: self.d2gs_reader.compression_enabled(),
             payload_prefix: payload
                 .iter()
                 .take(D2GS_DIAGNOSTIC_PREFIX_BYTES)
@@ -774,12 +868,16 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        CapturedTransport, Connection, ConnectionEvent, ConnectionTransportWarning, D2R_BNET_PORT,
-        LEGACY_D2GS_PORT, MAX_BUFFERED_D2GS_BYTES, classify_transport,
+        CaptureInterfaceSelectionReason, CapturedTransport, Connection, ConnectionEvent,
+        ConnectionTransportWarning, D2R_BNET_PORT, LEGACY_D2GS_PORT, MAX_BUFFERED_D2GS_BYTES,
+        classify_transport,
     };
     use crate::ServerMessage;
     use crate::core::game_state::GameState;
     use crate::core::protocol::server_message::ServerMessageParseError;
+    use pnet::datalink::NetworkInterface;
+    use pnet::ipnetwork::IpNetwork;
+    use std::net::{IpAddr, Ipv4Addr};
 
     #[test]
     fn classifies_legacy_d2gs_server_messages_by_source_port() {
@@ -812,6 +910,28 @@ mod tests {
     #[test]
     fn ignores_unrelated_ports() {
         assert_eq!(classify_transport(443, 51_000), CapturedTransport::Ignored);
+    }
+
+    #[test]
+    fn route_probe_selection_matches_routed_local_ip_to_interface() {
+        let hyper_v_ip = Ipv4Addr::new(172, 29, 80, 1);
+        let wifi_ip = Ipv4Addr::new(192, 168, 1, 106);
+        let interfaces = vec![
+            test_interface("Hyper-V Virtual Ethernet Adapter", 34, hyper_v_ip),
+            test_interface("Intel(R) Wi-Fi 6E AX210 160MHz", 15, wifi_ip),
+        ];
+
+        let selection =
+            super::select_capture_interface_for_route_ip(&interfaces, Some(IpAddr::V4(wifi_ip)))
+                .expect("routed interface should be selected");
+
+        assert_eq!(selection.interface.index, 15);
+        assert_eq!(
+            selection.reason,
+            CaptureInterfaceSelectionReason::RouteProbe {
+                local_ip: IpAddr::V4(wifi_ip)
+            }
+        );
     }
 
     #[test]
@@ -1044,5 +1164,16 @@ mod tests {
                 }
             )
         }));
+    }
+
+    fn test_interface(description: &str, index: u32, ip: Ipv4Addr) -> NetworkInterface {
+        NetworkInterface {
+            name: format!(r"\Device\NPF_{{{index}}}"),
+            description: description.to_owned(),
+            index,
+            mac: None,
+            ips: vec![IpNetwork::new(IpAddr::V4(ip), 24).unwrap()],
+            flags: 0,
+        }
     }
 }

@@ -31,11 +31,11 @@ objects, items, static-data names, and generated-map collision when available.
 This list describes the current code, not the final project goal.
 
 1. Network and protocol support
-   - [x] Passive packet capture through `Client`/`Connection` using `pnet`; legacy Classic/LoD plaintext D2GS server traffic from source port `4000` is routed to the D2GS reader. Client-to-server packets with destination port `4000` are ignored for now because they use the separate client packet space. Capture opens the datalink channel without promiscuous mode because local client/server traffic is sufficient and promiscuous membership can fail on some wireless interfaces.
-   - [x] Live server-to-client TCP payloads are reconstructed in sequence order before D2GS parsing. Duplicate retransmissions are ignored, overlapping retransmissions are trimmed, out-of-order segments are buffered, and bounded gap resets are reported as transport warnings.
+   - [x] Passive packet capture through `Client`/`Connection` using `pnet`; legacy Classic/LoD plaintext D2GS server traffic from source port `4000` is routed to the D2GS reader. Client-to-server packets with destination port `4000` are ignored for now because they use the separate client packet space. Capture selects the routed interface with a UDP route probe before falling back to a non-loopback adapter, opens the datalink channel without promiscuous mode, and uses a larger capture read buffer for packet bursts.
+   - [x] Live server-to-client TCP payloads are reconstructed in sequence order before D2GS parsing. Duplicate retransmissions are ignored, overlapping retransmissions are trimmed, out-of-order segments are buffered, and both bounded and timed gap resets are reported as transport warnings.
    - [x] D2R/modern Battle.net traffic on port `1119` is classified as encrypted/unknown transport and is no longer fed into the legacy D2GS parser.
    - [x] Plain D2GS TCP payloads are split into individual `D2GSPacket`s before parsing, including live-observed concatenated map-reveal and `0x9C` item bursts.
-   - [x] Compressed D2GS/Huffman framing tracks `0xAF` compression mode, supports one-byte and two-byte chunk headers, buffers compressed chunks split across TCP payloads, and is covered by Blacha-derived Huffman fixtures. More captured live compressed fixtures are still needed before claiming broad compressed-traffic compatibility.
+   - [x] Compressed D2GS/Huffman framing tracks `0xAF` compression mode, supports one-byte and two-byte chunk headers, buffers compressed chunks split across TCP payloads, preserves compression mode across passive-capture framing recovery, and is covered by Blacha-derived Huffman fixtures. More captured live compressed fixtures are still needed before claiming broad compressed-traffic compatibility.
    - [x] Parsed server packet IDs: `0x00..0x11`, `0x15`, `0x18`, `0x19..0x20`, `0x23`, `0x28`, `0x3E`, `0x47`, `0x48`, `0x4C`, `0x4D`, `0x51`, `0x53`, `0x59`, `0x5A`, `0x5B`, `0x5C`, `0x67..0x69`, `0x6B..0x6D`, `0x75`, `0x76`, `0x77`, `0x7D`, `0x8F`, `0x90`, `0x94`, `0x95`, `0x96`, `0x9C`, `0x9D`, `0xA9`, `0xAB`, `0xAC`, `0xAF`, and `0xB0`.
    - [x] Local-player HP/mana/stamina bitstreams from `0x18`, `0x95`, and `0x96` are decoded into raw packet-unit vitals, regeneration counters where present, and movement verification coordinates.
    - [ ] Missing high-priority packet parsers include party/relationship packets beyond the parsed `0x75` level update (`0x7F`, `0x8B..0x8D`), mercenary/summon updates (`0x4E`, `0x81`, `0x9E..0xA2`), chat/event streams, quest streams, and full item stat-list interpretation.
@@ -94,7 +94,10 @@ Tested with Diablo 2 (Legacy) and WINE
 
 You will need to install `ncap` or the `WinPcap Developers Pack` as per the [libpnet](https://github.com/libpnet/libpnet) build instructions for Windows (I tested the latter). Then point your user environment variable `LIB` (create if nonexistent) to the folder where to find Packet.lib i.e. `WpdPack/Lib/x64/` from the WinPcap Developers Pack you just downloaded. Then `cargo build --release`
 This will get the project building.  
-Currently, in order to find the internet-connected network interface, it is necessary to disable disconnected-but-enabled interfaces (such as virtual adaperts for VPN).
+Runtime capture chooses the routed interface with a UDP route probe, so
+disconnected or virtual adapters with private IPs should no longer need to be
+disabled. If the route probe cannot identify an adapter, libd2 falls back to the
+first usable non-loopback interface.
 
 ## Usage
 

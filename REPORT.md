@@ -518,13 +518,31 @@ MPQ bytes
   prefer stable binary layout, scanners, and small parser/writer algorithms
   over importing its whole data-mod pipeline.
 
+## Network Capture Recovery
+
+- Replaced the old Windows-specific first-IP interface heuristic with a
+  cross-platform UDP route probe. The probe asks the OS which local IPv4 address
+  would route to stable external targets, then matches that address back to the
+  `pnet` capture interface. If probing fails, capture falls back to the first
+  usable non-loopback adapter.
+- Increased the datalink capture read buffer from `pnet`'s 4 KiB default to 4
+  MiB so short D2GS bursts are less likely to overflow the passive capture path
+  while packet parsing and UI consumers are busy.
+- Split D2GS reader recovery into full session reset and framing-only reset.
+  TCP SYN/RST/FIN still clear the negotiated compression mode, but passive
+  capture gap/framing recovery now preserves `0xAF` Huffman mode so later
+  compressed chunks are not misclassified as plain packet ids.
+- Added a timed TCP gap recovery path. Out-of-order segments still get a reorder
+  window, but a missing captured segment no longer stalls later payloads until
+  the byte/segment buffer limit is reached.
+
 ## Verification
 
 ```text
 cargo test
 ```
 
-Result: passed. 131 tests.
+Result: passed. 143 tests.
 
 ```text
 cargo fmt --check

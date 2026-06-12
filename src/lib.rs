@@ -43,7 +43,8 @@ pub use crate::core::mpq::{
     encryption_table, mpq_decryption_key, mpq_hash,
 };
 pub use crate::core::network::connection::{
-    Connection, ConnectionEvent, ConnectionTransportWarning, D2gsBufferSnapshot,
+    CaptureInterfaceSelection, CaptureInterfaceSelectionReason, Connection, ConnectionEvent,
+    ConnectionTransportWarning, D2gsBufferSnapshot, route_probe_local_ip, select_capture_interface,
 };
 pub use crate::core::network::d2gs::D2GSPacket;
 pub use crate::core::object::WorldObject;
