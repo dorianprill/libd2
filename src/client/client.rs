@@ -46,6 +46,17 @@ impl Client {
             .listen_with_events(&mut self.game_state, on_event);
     }
 
+    /// Starts the blocking packet listener and gives the callback mutable access
+    /// to the internal [`GameState`] after each event.
+    pub fn start_with_mut_events<F>(&mut self, on_event: F)
+    where
+        F: FnMut(ConnectionEvent, &mut GameState),
+    {
+        self.connection.init();
+        self.connection
+            .listen_with_mut_events(&mut self.game_state, on_event);
+    }
+
     /// Processes a legacy D2GS payload without using live packet capture.
     ///
     /// This is useful for fixture replay and for tools that provide their own
@@ -63,7 +74,6 @@ impl Client {
         &mut self.game_state
     }
 }
-
 
 #[cfg(test)]
 mod tests {

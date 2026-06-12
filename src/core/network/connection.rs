@@ -439,6 +439,21 @@ impl Connection {
     where
         F: FnMut(ConnectionEvent, &GameState),
     {
+        self.listen_with_mut_events(game_state, |event, game_state| {
+            on_event(event, game_state);
+        });
+    }
+
+    /// Starts the blocking packet-capture loop and emits decoded D2GS events.
+    ///
+    /// This variant gives the callback mutable access to the current game state
+    /// after each applied message. UI tools use this for explicit operator
+    /// actions such as clearing stale state without tying that behavior to TCP
+    /// stream recovery.
+    pub fn listen_with_mut_events<F>(&mut self, game_state: &mut GameState, mut on_event: F)
+    where
+        F: FnMut(ConnectionEvent, &mut GameState),
+    {
         use self::pnet::datalink::Channel::Ethernet;
         let interface = self.interface.clone();
         if !self.initialized {
@@ -516,7 +531,7 @@ impl Connection {
         game_state: &mut GameState,
         on_event: &mut F,
     ) where
-        F: FnMut(ConnectionEvent, &GameState),
+        F: FnMut(ConnectionEvent, &mut GameState),
     {
         let udp = UdpPacket::new(packet);
 
@@ -555,7 +570,7 @@ impl Connection {
         game_state: &mut GameState,
         on_event: &mut F,
     ) where
-        F: FnMut(ConnectionEvent, &GameState),
+        F: FnMut(ConnectionEvent, &mut GameState),
     {
         let tcp = TcpPacket::new(packet);
         if let Some(tcp) = tcp {
@@ -608,7 +623,7 @@ impl Connection {
         game_state: &mut GameState,
         on_event: &mut F,
     ) where
-        F: FnMut(ConnectionEvent, &GameState),
+        F: FnMut(ConnectionEvent, &mut GameState),
     {
         match protocol {
             IpNextHeaderProtocols::Udp => {
@@ -628,7 +643,7 @@ impl Connection {
         game_state: &mut GameState,
         on_event: &mut F,
     ) where
-        F: FnMut(ConnectionEvent, &GameState),
+        F: FnMut(ConnectionEvent, &mut GameState),
     {
         let header = Ipv4Packet::new(ethernet.payload());
         if let Some(header) = header {
@@ -653,7 +668,7 @@ impl Connection {
         game_state: &mut GameState,
         on_event: &mut F,
     ) where
-        F: FnMut(ConnectionEvent, &GameState),
+        F: FnMut(ConnectionEvent, &mut GameState),
     {
         let header = Ipv6Packet::new(ethernet.payload());
         if let Some(header) = header {
@@ -678,7 +693,7 @@ impl Connection {
         game_state: &mut GameState,
         on_event: &mut F,
     ) where
-        F: FnMut(ConnectionEvent, &GameState),
+        F: FnMut(ConnectionEvent, &mut GameState),
     {
         let interface_name = &interface.name[..];
         match ethernet.get_ethertype() {
@@ -727,6 +742,21 @@ impl Connection {
     ) where
         F: FnMut(ConnectionEvent, &GameState),
     {
+        self.process_d2gs_payload_with_mut_events(payload, game_state, |event, game_state| {
+            on_event(event, game_state);
+        });
+    }
+
+    /// Processes a legacy D2GS payload and calls `on_event` for each decoded
+    /// packet, allowing the callback to explicitly mutate the game state.
+    pub fn process_d2gs_payload_with_mut_events<F>(
+        &mut self,
+        payload: &[u8],
+        game_state: &mut GameState,
+        mut on_event: F,
+    ) where
+        F: FnMut(ConnectionEvent, &mut GameState),
+    {
         self.read_d2gs_payload(payload, game_state, &mut on_event);
     }
 
@@ -739,7 +769,7 @@ impl Connection {
         game_state: &mut GameState,
         on_event: &mut F,
     ) where
-        F: FnMut(ConnectionEvent, &GameState),
+        F: FnMut(ConnectionEvent, &mut GameState),
     {
         let new_stream = self.d2gs_tcp_stream_key.as_ref() != Some(&stream_key);
         let reset_reason = if new_stream {
@@ -756,7 +786,6 @@ impl Connection {
             self.d2gs_tcp_stream.reset();
             self.d2gs_reader.reset();
             self.d2gs_tcp_stream_key = Some(stream_key);
-            game_state.reset_session();
             on_event(
                 ConnectionEvent::TransportWarning {
                     warning: ConnectionTransportWarning::D2gsSessionReset { reason },
@@ -769,7 +798,6 @@ impl Connection {
             if tcp_flags & TcpFlags::FIN != 0 {
                 self.d2gs_tcp_stream.reset();
                 self.d2gs_reader.reset();
-                game_state.reset_session();
                 on_event(
                     ConnectionEvent::TransportWarning {
                         warning: ConnectionTransportWarning::D2gsSessionReset {
@@ -803,7 +831,6 @@ impl Connection {
         if tcp_flags & TcpFlags::FIN != 0 {
             self.d2gs_tcp_stream.reset();
             self.d2gs_reader.reset();
-            game_state.reset_session();
             on_event(
                 ConnectionEvent::TransportWarning {
                     warning: ConnectionTransportWarning::D2gsSessionReset {
@@ -817,7 +844,7 @@ impl Connection {
 
     fn read_d2gs_payload<F>(&mut self, payload: &[u8], game_state: &mut GameState, on_event: &mut F)
     where
-        F: FnMut(ConnectionEvent, &GameState),
+        F: FnMut(ConnectionEvent, &mut GameState),
     {
         let buffered_before = self.d2gs_reader.buffered_len();
         let mut emitted_packet = false;
@@ -884,7 +911,7 @@ fn emit_buffered_packets<F>(
     on_event: &mut F,
 ) -> bool
 where
-    F: FnMut(ConnectionEvent, &GameState),
+    F: FnMut(ConnectionEvent, &mut GameState),
 {
     let mut emitted_packet = false;
     while let Some(packet) = reader.next() {
@@ -1091,7 +1118,7 @@ mod tests {
     }
 
     #[test]
-    fn live_tcp_new_stream_clears_stale_game_state_and_emits_event() {
+    fn live_tcp_new_stream_preserves_game_state_and_emits_event() {
         let mut connection = Connection::new();
         let mut state = GameState::default();
         assert!(state.update(ServerMessage::AssignPlayer {
@@ -1116,12 +1143,12 @@ mod tests {
             &[],
             &mut state,
             &mut |event, game_state| {
-                assert!(game_state.players().is_empty());
+                assert!(game_state.player(7).is_some());
                 events.push(event);
             },
         );
 
-        assert!(state.players().is_empty());
+        assert!(state.player(7).is_some());
         assert!(events.iter().any(|event| matches!(
             event,
             ConnectionEvent::TransportWarning {

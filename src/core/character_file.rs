@@ -2234,8 +2234,8 @@ mod tests {
         }));
         assert!(state.update(ServerMessage::LifeManaUpdate {
             bitfield: status_bitfield::<12>(&[
-                (777, 15),
-                (333, 15),
+                (8, 15),
+                (16, 15),
                 (555, 15),
                 (5101, 16),
                 (5201, 16),

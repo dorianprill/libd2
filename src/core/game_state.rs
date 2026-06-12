@@ -388,7 +388,8 @@ impl GameState {
         let Some(player) = self.local_player_mut() else {
             return false;
         };
-        player.set_stat(stat, game_state_stat_value(stat, amount));
+        let amount = local_stat_value_with_resource_floor(player, stat, amount);
+        player.set_stat(stat, amount);
         true
     }
 
@@ -504,14 +505,14 @@ impl GameState {
                 true
             }
             0x01 => {
-                if unit_life > u8::MAX as u16 {
+                let Some(life_percent) = unit_life_percent_from_packet(unit_life) else {
                     return false;
-                }
+                };
                 if let Some(mercenary) = self.mercenaries.get_mut(&unit_id) {
-                    mercenary.set_life_percent(unit_life as u8);
+                    mercenary.set_life_percent(life_percent);
                     true
                 } else if let Some(npc) = self.npcs.get_mut(&unit_id) {
-                    npc.set_life_percent(unit_life as u8);
+                    npc.set_life_percent(life_percent);
                     true
                 } else {
                     false
@@ -542,6 +543,7 @@ impl GameState {
         };
         player.set_vitals(vitals);
         player.set_movement(movement);
+        ensure_resource_maxima_cover_vitals(player);
         true
     }
 
@@ -551,6 +553,7 @@ impl GameState {
         };
         player.set_stamina(stamina);
         player.set_movement(movement);
+        ensure_resource_maxima_cover_vitals(player);
         true
     }
 
@@ -644,16 +647,16 @@ impl GameState {
         true
     }
 
-    fn move_or_create_npc(&mut self, unit_id: u32, location: Coordinate, life: Option<u8>) {
+    fn move_or_create_npc(&mut self, unit_id: u32, location: Coordinate, life_percent: Option<u8>) {
         if let Some(mercenary) = self.mercenaries.get_mut(&unit_id) {
             mercenary.set_location(location);
-            if let Some(life) = life {
-                mercenary.set_life_percent(life);
+            if let Some(life_percent) = life_percent {
+                mercenary.set_life_percent(life_percent);
             }
             return;
         }
 
-        if life == Some(0) {
+        if life_percent == Some(0) {
             self.npcs.remove(&unit_id);
             return;
         }
@@ -662,14 +665,14 @@ impl GameState {
             .entry(unit_id)
             .and_modify(|npc| {
                 npc.set_location(location);
-                if let Some(life) = life {
-                    npc.set_life_percent(life);
+                if let Some(life_percent) = life_percent {
+                    npc.set_life_percent(life_percent);
                 }
             })
             .or_insert_with(|| {
                 let mut npc = Npc::new(unit_id, location);
-                if let Some(life) = life {
-                    npc.set_life_percent(life);
+                if let Some(life_percent) = life_percent {
+                    npc.set_life_percent(life_percent);
                 }
                 npc
             });
@@ -1094,7 +1097,11 @@ impl GameState {
         }
     }
 
-    pub(crate) fn reset_session(&mut self) {
+    pub fn reset(&mut self) {
+        self.reset_session();
+    }
+
+    fn reset_session(&mut self) {
         self.players.clear();
         self.player_aliases.clear();
         self.pending_player_stats.clear();
@@ -1501,12 +1508,15 @@ impl Update for GameState {
                 unit_life,
                 ..
             } => {
-                let life = if state == 0x08 || state == 0x09 {
-                    0
+                let life_percent = if state == 0x08 || state == 0x09 {
+                    Some(0)
                 } else {
-                    unit_life
+                    unit_life_percent_from_packet(unit_life as u16)
                 };
-                self.move_or_create_npc(unit_id, Coordinate::new(x, y), Some(life));
+                let Some(life_percent) = life_percent else {
+                    return false;
+                };
+                self.move_or_create_npc(unit_id, Coordinate::new(x, y), Some(life_percent));
                 if let Some(npc) = self.npcs.get_mut(&unit_id) {
                     npc.set_state(state);
                 }
@@ -1518,17 +1528,23 @@ impl Update for GameState {
                 y,
                 unit_life,
             } => {
-                self.move_or_create_npc(unit_id, Coordinate::new(x, y), Some(unit_life));
+                let Some(life_percent) = unit_life_percent_from_packet(unit_life as u16) else {
+                    return false;
+                };
+                self.move_or_create_npc(unit_id, Coordinate::new(x, y), Some(life_percent));
                 true
             }
             ServerMessage::NpcHeal {
                 unit_id, unit_life, ..
             } => {
+                let Some(life_percent) = unit_life_percent_from_packet(unit_life as u16) else {
+                    return false;
+                };
                 if let Some(mercenary) = self.mercenaries.get_mut(&unit_id) {
-                    mercenary.set_life_percent(unit_life);
+                    mercenary.set_life_percent(life_percent);
                     true
                 } else if let Some(npc) = self.npcs.get_mut(&unit_id) {
-                    npc.set_life_percent(unit_life);
+                    npc.set_life_percent(life_percent);
                     true
                 } else {
                     false
@@ -1542,6 +1558,9 @@ impl Update for GameState {
                 life_percent,
                 ..
             } => {
+                let Some(life_percent) = unit_life_percent_from_packet(life_percent as u16) else {
+                    return false;
+                };
                 if let Some(mercenary) = self.mercenaries.get_mut(&unit_id) {
                     mercenary.set_location(Coordinate::new(unit_x, unit_y));
                     mercenary.set_life_percent(life_percent);
@@ -1725,8 +1744,46 @@ fn game_state_stat_value(stat_id: u16, wire_value: u32) -> u32 {
     }
 }
 
+fn local_stat_value_with_resource_floor(player: &Player, stat_id: u16, wire_value: u32) -> u32 {
+    let value = game_state_stat_value(stat_id, wire_value);
+    let Some(current) = current_resource_for_max_stat(player.vitals(), stat_id) else {
+        return value;
+    };
+
+    value.max(current)
+}
+
 fn is_resource_stat(stat_id: u16) -> bool {
     (UnitStat::Life as u16..=UnitStat::StaminaMax as u16).contains(&stat_id)
+}
+
+fn current_resource_for_max_stat(vitals: Option<PlayerVitals>, stat_id: u16) -> Option<u32> {
+    let vitals = vitals?;
+    match stat_id {
+        value if value == UnitStat::LifeMax as u16 => vitals.life().map(u32::from),
+        value if value == UnitStat::ManaMax as u16 => vitals.mana().map(u32::from),
+        value if value == UnitStat::StaminaMax as u16 => vitals.stamina().map(u32::from),
+        _ => None,
+    }
+}
+
+fn ensure_resource_maxima_cover_vitals(player: &mut Player) {
+    for stat_id in [
+        UnitStat::LifeMax as u16,
+        UnitStat::ManaMax as u16,
+        UnitStat::StaminaMax as u16,
+    ] {
+        let Some(current) = current_resource_for_max_stat(player.vitals(), stat_id) else {
+            continue;
+        };
+        if player.stat(stat_id).map_or(true, |max| max < current) {
+            player.set_stat(stat_id, current);
+        }
+    }
+}
+
+fn unit_life_percent_from_packet(packet_value: u16) -> Option<u8> {
+    PartyLifeFraction::from_packet_value(packet_value).map(PartyLifeFraction::percent_rounded)
 }
 
 fn skill_cast_marker_id(unit_type: u8, unit_id: u32, skill_id: u16) -> u32 {
@@ -2047,6 +2104,43 @@ mod tests {
     }
 
     #[test]
+    fn local_vitals_raise_resource_max_floor() {
+        let mut state = GameState::default();
+        state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: 1,
+            szname: *b"Joan\0\0\0\0\0\0\0\0\0\0\0\0",
+            x: 10,
+            y: 20,
+        });
+        mark_local(&mut state, 7);
+
+        assert!(state.update(ServerMessage::SetAttributeU16 {
+            attribute: UnitStat::LifeMax as u8,
+            amount: 97 * 256,
+        }));
+        assert!(state.update(ServerMessage::LifeManaUpdate {
+            bitfield: status_bitfield::<12>(&[
+                (101, 15),
+                (35, 15),
+                (80, 15),
+                (10, 16),
+                (20, 16),
+                (0, 8),
+                (0, 8),
+            ]),
+        }));
+        assert!(state.update(ServerMessage::SetAttributeU16 {
+            attribute: UnitStat::LifeMax as u8,
+            amount: 97 * 256,
+        }));
+
+        let player = state.player(7).expect("player exists");
+        assert_eq!(player.vitals().and_then(|vitals| vitals.life()), Some(101));
+        assert_eq!(player.stat(UnitStat::LifeMax as u16), Some(101));
+    }
+
+    #[test]
     fn player_skills_info_updates_raw_skills_and_legacy_save_table() {
         let mut state = GameState::default();
         state.update(ServerMessage::AssignPlayer {
@@ -2149,6 +2243,36 @@ mod tests {
     }
 
     #[test]
+    fn ally_party_info_normalizes_mercenary_life_from_128_scale() {
+        let mut state = GameState::default();
+        assert!(state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: 1,
+            szname: name16("Owner"),
+            x: 10,
+            y: 20,
+        }));
+        assert!(state.update(ServerMessage::AssignMerc {
+            skill_id: 0x0A,
+            summon_type: 0x0152,
+            player_id: 7,
+            merc_id: 0x5566_7788,
+            seed2: 0x99AA_BBCC,
+            init_seed: 0xDDEE_FF00,
+        }));
+
+        assert!(state.update(ServerMessage::AllyPartyInfo {
+            unit_type: 1,
+            unit_life: 128,
+            unit_id: 0x5566_7788,
+            unit_area: 2,
+        }));
+
+        let mercenary = state.mercenary(0x5566_7788).expect("merc exists");
+        assert_eq!(mercenary.life_percent(), Some(100));
+    }
+
+    #[test]
     fn early_player_stat_updates_apply_after_player_alias_is_known() {
         let mut state = GameState::default();
         assert!(state.update(ServerMessage::PlayerJoined {
@@ -2211,7 +2335,7 @@ mod tests {
         let mercenary = state.mercenary(0x5566_7788).expect("merc exists");
         assert_eq!(mercenary.location(), Coordinate::new(5200, 5100));
         assert!(mercenary.world_location_known());
-        assert_eq!(mercenary.life_percent(), Some(73));
+        assert_eq!(mercenary.life_percent(), Some(57));
     }
 
     #[test]
@@ -2248,7 +2372,7 @@ mod tests {
         assert_eq!(player.mercenary_id(), 0x5566_7788);
         let mercenary = state.mercenary(0x5566_7788).expect("merc remains");
         assert!(!mercenary.world_location_known());
-        assert_eq!(mercenary.life_percent(), Some(73));
+        assert_eq!(mercenary.life_percent(), Some(57));
     }
 
     #[test]
@@ -2792,7 +2916,7 @@ mod tests {
             unit_code: 156,
             unit_x: 300,
             unit_y: 301,
-            life_percent: 100,
+            life_percent: 128,
             packet_size: 13,
             bitstream: Vec::new(),
         }));
@@ -2823,7 +2947,7 @@ mod tests {
         packet.extend_from_slice(&156u16.to_le_bytes());
         packet.extend_from_slice(&300u16.to_le_bytes());
         packet.extend_from_slice(&301u16.to_le_bytes());
-        packet.push(100);
+        packet.push(128);
         packet.push(13);
 
         let applied = state
@@ -2852,7 +2976,7 @@ mod tests {
             unit_code: 156,
             unit_x: 300,
             unit_y: 301,
-            life_percent: 100,
+            life_percent: 128,
             packet_size: 13,
             bitstream: Vec::new(),
         });
@@ -3057,7 +3181,7 @@ mod tests {
             unit_code: 156,
             unit_x: 5220,
             unit_y: 5120,
-            life_percent: 100,
+            life_percent: 128,
             packet_size: 13,
             bitstream: Vec::new(),
         }));
@@ -3226,7 +3350,7 @@ mod tests {
             unit_code: 156,
             unit_x: 300,
             unit_y: 301,
-            life_percent: 100,
+            life_percent: 128,
             packet_size: 13,
             bitstream: Vec::new(),
         });
