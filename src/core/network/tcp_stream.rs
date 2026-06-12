@@ -7,9 +7,11 @@
 //! out-of-order buffering, and a bounded reset path when capture misses a gap.
 
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
 
 const DEFAULT_MAX_PENDING_SEGMENTS: usize = 32;
 const DEFAULT_MAX_PENDING_BYTES: usize = 64 * 1024;
+const DEFAULT_MAX_GAP_DURATION: Duration = Duration::from_millis(1500);
 
 /// Diagnostic emitted while reconstructing a TCP payload stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +49,17 @@ pub enum TcpReassemblyEvent {
         expected_sequence: u32,
         buffered_segments: usize,
         buffered_bytes: usize,
+    },
+    /// A missing segment did not arrive within the passive-capture recovery
+    /// window. The caller should discard higher-level framing state and resume
+    /// at the new segment.
+    GapTimeoutReset {
+        sequence: u32,
+        len: usize,
+        expected_sequence: u32,
+        buffered_segments: usize,
+        buffered_bytes: usize,
+        elapsed_millis: u128,
     },
 }
 
@@ -88,8 +101,10 @@ pub struct TcpStreamReassembler {
     next_sequence: Option<u32>,
     pending: BTreeMap<u32, Vec<u8>>,
     pending_bytes: usize,
+    gap_started_at: Option<Instant>,
     max_pending_segments: usize,
     max_pending_bytes: usize,
+    max_gap_duration: Duration,
 }
 
 impl Default for TcpStreamReassembler {
@@ -98,8 +113,10 @@ impl Default for TcpStreamReassembler {
             next_sequence: None,
             pending: BTreeMap::new(),
             pending_bytes: 0,
+            gap_started_at: None,
             max_pending_segments: DEFAULT_MAX_PENDING_SEGMENTS,
             max_pending_bytes: DEFAULT_MAX_PENDING_BYTES,
+            max_gap_duration: DEFAULT_MAX_GAP_DURATION,
         }
     }
 }
@@ -113,9 +130,23 @@ impl TcpStreamReassembler {
     /// Creates a reassembler with small limits for focused tests.
     #[cfg(test)]
     fn with_limits(max_pending_segments: usize, max_pending_bytes: usize) -> Self {
+        Self::with_limits_and_gap_duration(
+            max_pending_segments,
+            max_pending_bytes,
+            DEFAULT_MAX_GAP_DURATION,
+        )
+    }
+
+    #[cfg(test)]
+    fn with_limits_and_gap_duration(
+        max_pending_segments: usize,
+        max_pending_bytes: usize,
+        max_gap_duration: Duration,
+    ) -> Self {
         Self {
             max_pending_segments,
             max_pending_bytes,
+            max_gap_duration,
             ..Self::default()
         }
     }
@@ -125,6 +156,7 @@ impl TcpStreamReassembler {
         self.next_sequence = None;
         self.pending.clear();
         self.pending_bytes = 0;
+        self.gap_started_at = None;
     }
 
     /// Ingests one captured TCP segment and returns ordered payload chunks.
@@ -134,6 +166,10 @@ impl TcpStreamReassembler {
     /// without payload and call `reset` when the 4-tuple changes or a new TCP
     /// handshake starts.
     pub fn push(&mut self, sequence: u32, payload: &[u8]) -> TcpReassemblyResult {
+        self.push_at(sequence, payload, Instant::now())
+    }
+
+    fn push_at(&mut self, sequence: u32, payload: &[u8], now: Instant) -> TcpReassemblyResult {
         let mut result = TcpReassemblyResult::default();
         if payload.is_empty() {
             return result;
@@ -148,6 +184,7 @@ impl TcpStreamReassembler {
         if sequence == expected_sequence {
             self.accept_contiguous(sequence, payload.to_vec(), &mut result);
             self.release_pending(&mut result);
+            self.clear_gap_if_complete();
             return result;
         }
 
@@ -171,10 +208,11 @@ impl TcpStreamReassembler {
             });
             self.accept_contiguous(expected_sequence, trimmed, &mut result);
             self.release_pending(&mut result);
+            self.clear_gap_if_complete();
             return result;
         }
 
-        self.buffer_gap(sequence, payload, expected_sequence, &mut result);
+        self.buffer_gap(sequence, payload, expected_sequence, now, &mut result);
         result
     }
 
@@ -193,11 +231,32 @@ impl TcpStreamReassembler {
         sequence: u32,
         payload: &[u8],
         expected_sequence: u32,
+        now: Instant,
         result: &mut TcpReassemblyResult,
     ) {
+        let gap_started_at = *self.gap_started_at.get_or_insert(now);
         if !self.pending.contains_key(&sequence) {
             self.pending_bytes = self.pending_bytes.saturating_add(payload.len());
             self.pending.insert(sequence, payload.to_vec());
+        }
+
+        let elapsed = now.saturating_duration_since(gap_started_at);
+        if elapsed >= self.max_gap_duration {
+            let buffered_segments = self.pending.len();
+            let buffered_bytes = self.pending_bytes;
+            self.reset();
+            self.next_sequence = Some(sequence);
+            result.reset_required = true;
+            result.push_event(TcpReassemblyEvent::GapTimeoutReset {
+                sequence,
+                len: payload.len(),
+                expected_sequence,
+                buffered_segments,
+                buffered_bytes,
+                elapsed_millis: elapsed.as_millis(),
+            });
+            self.accept_contiguous(sequence, payload.to_vec(), result);
+            return;
         }
 
         if self.pending.len() > self.max_pending_segments
@@ -241,11 +300,18 @@ impl TcpStreamReassembler {
             self.accept_contiguous(expected_sequence, payload, result);
         }
     }
+
+    fn clear_gap_if_complete(&mut self) {
+        if self.pending.is_empty() {
+            self.gap_started_at = None;
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{TcpReassemblyEvent, TcpStreamReassembler};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn reassembler_emits_in_order_segments() {
@@ -344,6 +410,36 @@ mod tests {
                 expected_sequence: 103,
                 buffered_segments: 2,
                 buffered_bytes: 6,
+            }]
+        );
+    }
+
+    #[test]
+    fn reassembler_resets_after_gap_timeout() {
+        let mut stream = TcpStreamReassembler::with_limits_and_gap_duration(
+            32,
+            64 * 1024,
+            Duration::from_millis(10),
+        );
+        let started = Instant::now();
+
+        stream.push_at(100, b"abc", started);
+        let gap = stream.push_at(106, b"ghi", started + Duration::from_millis(1));
+        let reset = stream.push_at(109, b"jkl", started + Duration::from_millis(11));
+
+        assert!(gap.payloads().is_empty());
+        assert!(!gap.reset_required());
+        assert!(reset.reset_required());
+        assert_eq!(reset.payloads(), &[b"jkl".to_vec()]);
+        assert_eq!(
+            reset.events(),
+            &[TcpReassemblyEvent::GapTimeoutReset {
+                sequence: 109,
+                len: 3,
+                expected_sequence: 103,
+                buffered_segments: 2,
+                buffered_bytes: 6,
+                elapsed_millis: 10,
             }]
         );
     }

@@ -57,15 +57,32 @@ impl D2GSReader {
 
     /// Clears queued packets and any partial D2GS packet bytes.
     ///
-    /// Live capture uses this when the lower TCP stream detects that bytes were
-    /// missed and has to resume at a later sequence. Keeping the partial D2GS
-    /// buffer in that situation would make the next valid packet look like a
-    /// continuation of stale data.
+    /// Use this when a D2GS TCP session ends or restarts. For recovery inside
+    /// an existing session, use [`D2GSReader::reset_framing`] so negotiated
+    /// compression mode survives packet-loss recovery.
     pub fn reset(&mut self) {
         self.packets.clear();
         self.packet_stream.clear();
         self.compressed_stream.clear();
         self.compression_enabled = false;
+    }
+
+    /// Clears queued packets and partial framing state without forgetting the
+    /// session's negotiated compression mode.
+    ///
+    /// Passive capture uses this when TCP bytes were missed and parsing has to
+    /// resume at a later sequence. Keeping partial packet/chunk bytes would make
+    /// the next valid payload look like stale continuation data, but clearing
+    /// `compression_enabled` would misclassify later Huffman chunks as plain
+    /// D2GS packets.
+    pub fn reset_framing(&mut self) {
+        self.packets.clear();
+        self.packet_stream.clear();
+        self.compressed_stream.clear();
+    }
+
+    pub fn compression_enabled(&self) -> bool {
+        self.compression_enabled
     }
 
     /// Returns the number of D2GS bytes waiting for more data.
@@ -473,5 +490,37 @@ mod tests {
             ]
         );
         assert_eq!(reader.buffered_len(), 0);
+    }
+
+    #[test]
+    fn framing_reset_preserves_compression_mode() {
+        let mut reader = D2GSReader::new();
+        reader.read(&[0xAF, 0x01]);
+        assert!(reader.next().is_some());
+        assert!(reader.compression_enabled());
+
+        reader.reset_framing();
+        assert!(reader.compression_enabled());
+        reader.read(&[0x06, 0x7A, 0x04, 0x64, 0xBB, 0xBC]);
+
+        assert_eq!(
+            drain_packets(&mut reader),
+            vec![
+                vec![0x01, 0x00, 0x04, 0x08, 0x30, 0x00, 0x01, 0x01],
+                vec![0x00]
+            ]
+        );
+    }
+
+    #[test]
+    fn session_reset_clears_compression_mode() {
+        let mut reader = D2GSReader::new();
+        reader.read(&[0xAF, 0x01]);
+        assert!(reader.next().is_some());
+        assert!(reader.compression_enabled());
+
+        reader.reset();
+
+        assert!(!reader.compression_enabled());
     }
 }

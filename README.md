@@ -1,11 +1,9 @@
 # A Diablo II Core and Client Library
 
-A Diablo II library for passive game-state reconstruction, save/static-data
-parsing, and helper-tool foundations, written in Rust for performance, safety,
-and re-usability without modifying the running game client.
+A Diablo II library for passive game-state and reconstruction from game server packet de-serialization, savegame reading/writing, and static-data parsing without modifying the running game client.
+Written in Rust for performance, safety and re-usability.
 
-The current focus is legacy Classic/Lord of Destruction 1.14-era packet capture
-and state reconstruction, plus read-only foundations for character files, MPQ
+The current focus is legacy Classic/Lord of Destruction 1.14-era packet capture and state reconstruction, plus read-only foundations for character files, MPQ
 archives, static data, and generated maps. The companion overlay/debug UI is
 [d2helper](https://github.com/dorianprill/d2helper), which consumes this crate
 for live LoD packet capture and automap-style visualization.
@@ -18,24 +16,22 @@ If you are interested in Diablo II and/or Rust, this might be fun!
 
 In the long term, the library aims to make it possible to build high-quality
 external Diablo II tooling: packet-derived live game-state visualization,
-map/collision/pathing helpers, event notifications, character-file inspection
-and editing, and eventually more complete client/protocol workflows.
+map/collision/pathing helpers, event notifications, character-file inspection and editing, and eventually more complete client/protocol workflows.
 
-The immediate consumer is
-[d2helper](https://github.com/dorianprill/d2helper), an egui-based helper and
-debug overlay for LoD 1.14 that displays packet-derived players, monsters,
-objects, items, static-data names, and generated-map collision when available.
+I have started a small companion project called
+[d2helper](https://github.com/dorianprill/d2helper), an egui-based game info application that displays packet-derived players, monsters,
+objects, items, static-data names, and generated-map collision (when available).
+
+A lightweight savegame editor that only allows edits that can be achieved through actual play is also on the roadmap.
 
 ## Feature List
 
-This list describes the current code, not the final project goal.
-
 1. Network and protocol support
-   - [x] Passive packet capture through `Client`/`Connection` using `pnet`; legacy Classic/LoD plaintext D2GS server traffic from source port `4000` is routed to the D2GS reader. Client-to-server packets with destination port `4000` are ignored for now because they use the separate client packet space. Capture opens the datalink channel without promiscuous mode because local client/server traffic is sufficient and promiscuous membership can fail on some wireless interfaces.
-   - [x] Live server-to-client TCP payloads are reconstructed in sequence order before D2GS parsing. Duplicate retransmissions are ignored, overlapping retransmissions are trimmed, out-of-order segments are buffered, and bounded gap resets are reported as transport warnings.
+   - [x] Passive packet capture through `Client`/`Connection` using `pnet`; legacy Classic/LoD plaintext D2GS server traffic from source port `4000` is routed to the D2GS reader. Client-to-server packets with destination port `4000` are ignored for now because they use the separate client packet space. Capture selects the routed interface with a UDP route probe before falling back to a non-loopback adapter, opens the datalink channel without promiscuous mode, and uses a larger capture read buffer for packet bursts.
+   - [x] Live server-to-client TCP payloads are reconstructed in sequence order before D2GS parsing. Duplicate retransmissions are ignored, overlapping retransmissions are trimmed, out-of-order segments are buffered, and both bounded and timed gap resets are reported as transport warnings.
    - [x] D2R/modern Battle.net traffic on port `1119` is classified as encrypted/unknown transport and is no longer fed into the legacy D2GS parser.
    - [x] Plain D2GS TCP payloads are split into individual `D2GSPacket`s before parsing, including live-observed concatenated map-reveal and `0x9C` item bursts.
-   - [x] Compressed D2GS/Huffman framing tracks `0xAF` compression mode, supports one-byte and two-byte chunk headers, buffers compressed chunks split across TCP payloads, and is covered by Blacha-derived Huffman fixtures. More captured live compressed fixtures are still needed before claiming broad compressed-traffic compatibility.
+   - [x] Compressed D2GS/Huffman framing tracks `0xAF` compression mode, supports one-byte and two-byte chunk headers, buffers compressed chunks split across TCP payloads, preserves compression mode across passive-capture framing recovery, and is covered by Blacha-derived Huffman fixtures. More captured live compressed fixtures are still needed before claiming broad compressed-traffic compatibility.
    - [x] Parsed server packet IDs: `0x00..0x11`, `0x15`, `0x18`, `0x19..0x20`, `0x23`, `0x28`, `0x3E`, `0x47`, `0x48`, `0x4C`, `0x4D`, `0x51`, `0x53`, `0x59`, `0x5A`, `0x5B`, `0x5C`, `0x67..0x69`, `0x6B..0x6D`, `0x75`, `0x76`, `0x77`, `0x7D`, `0x8F`, `0x90`, `0x94`, `0x95`, `0x96`, `0x9C`, `0x9D`, `0xA9`, `0xAB`, `0xAC`, `0xAF`, and `0xB0`.
    - [x] Local-player HP/mana/stamina bitstreams from `0x18`, `0x95`, and `0x96` are decoded into raw packet-unit vitals, regeneration counters where present, and movement verification coordinates.
    - [ ] Missing high-priority packet parsers include party/relationship packets beyond the parsed `0x75` level update (`0x7F`, `0x8B..0x8D`), mercenary/summon updates (`0x4E`, `0x81`, `0x9E..0xA2`), chat/event streams, quest streams, and full item stat-list interpretation.
@@ -49,6 +45,7 @@ This list describes the current code, not the final project goal.
    - [x] Tracks item unit ids, world/unit ownership, raw item action bitstreams, typed action/category/container ids, flags, item-data version, destination/placement, item code, gold amount, used/open sockets, item level, quality, graphic/color ids, quality-specific ids, runeword metadata, armor defense, and durability from `0x9C`/`0x9D` where the packet bitstream contains those fields.
    - [x] Tracks latest raw `0x7D` item-state flags by item GUID.
    - [x] Preserves raw `0x3E` item-stat update bitstreams in arrival order, including the 1.14d padded 34-byte framing form. The packet envelope does not expose a stable item GUID, so these are not yet merged into individual `Item` records.
+   - [ ] Maybe later: decode `ItemStatUpdate` bitstreams with `ItemStatCost` metadata and merge the resulting semantic stats into the owning item when ownership can be resolved.
    - [ ] Full item stat lists, resolved item names/properties, complete ground/inventory/stash/cube/belt semantics, missiles, mercenaries, party/hostility, buffs/states, quests, and derived event notifications are not complete.
 3. Character files and inventory profiles
    - [x] `.d2s` loading/parsing/saving is raw-preserving and validates magic, file size, and checksum; saving repairs size and checksum.
@@ -94,7 +91,9 @@ Tested with Diablo 2 (Legacy) and WINE
 
 You will need to install `ncap` or the `WinPcap Developers Pack` as per the [libpnet](https://github.com/libpnet/libpnet) build instructions for Windows (I tested the latter). Then point your user environment variable `LIB` (create if nonexistent) to the folder where to find Packet.lib i.e. `WpdPack/Lib/x64/` from the WinPcap Developers Pack you just downloaded. Then `cargo build --release`
 This will get the project building.  
-Currently, in order to find the internet-connected network interface, it is necessary to disable disconnected-but-enabled interfaces (such as virtual adaperts for VPN).
+Runtime capture chooses the routed interface with a UDP route probe, so
+disconnected or virtual adapters with private IPs should not need to be
+disabled. If the route probe cannot identify an adapter, libd2 falls back to the first usable non-loopback interface and there is also an environment variable `D2_CAPTURE_INTERFACE` that can be set to the name of the interface to use.
 
 ## Usage
 
@@ -143,22 +142,15 @@ data for names, and renders a packet-derived automap/debug view in egui.
 
 ## History
 
-The first commit was on 2022-02-23. The initial version was a Rust network/TCP
-sniffing layer for Diablo II game-server packets, followed by Rust translations
-of the legacy Huffman decoder and packet parsers from D2BS, RedVex, and
-OmegaBot-era resources. That early code already fixed up several packet layouts
-for LoD 1.14 and had a simple `GameState` plus basic Diablo II data structures.
+I Initially started this effort in 2018 as a Rust implementation of anetwork/TCP sniffing program for Diablo II legacy game-server packets, with translations of the legacy Huffman decoder and packet parsers from D2BS, RedVex, and OmegaBot-era resources, if I remember correctly. That early code already fixed up several packet layouts for LoD 1.14 and had a simple `GameState` plus basic Diablo II data structures.
 
-Development resumed with a broader scope: keep the packet-only legacy LoD path
-useful for external tools, add version-aware save parsing for Classic, LoD, D2R,
-and Reign of the Warlock, port enough MPQ/static-data support for names and map
-metadata, and expose a stable library API that d2helper can build on.
+After release of D2:RotW I resumed development to enable more functionality: keep the packet-only legacy LoD path
+useful for external tools, add version-aware save parsing for `Classic`, `LoD`, `D2R`, and `Reign of the Warlock`, port enough MPQ/static-data support for names and map metadata, and expose a stable library API that others can build on.
 
 ## Contributing
 
 This is quite the challenge so any help is appreciated!  
-There is quite a bit of awesome code out there, but scattered across various sources.  
-> Update: We now have AI to translate and consolidate all the awesome code out there into this library, so the need for help is not as big as it was before. But if you want to contribute, feel free to reach out!
+There is quite a bit of awesome code out there, but scattered across various sources which i am trying to consolidate and port to Rust. If you want to help, the best way is probably to find a packet or feature that is not yet implemented, find a fixture for it (or capture one yourself), and implement the parsing and state reconstruction for it. If you want to help with save files, MPQs, or maps, those are also areas that could use some love.
 
 ## Disclaimer and Credits
 
@@ -170,13 +162,14 @@ protocol and save-editing areas are intentionally incomplete.
 
 Here are some great resources on the original game, thanks to everyone who has been working on reverse engineering and botting for this game over the years, without you this would not be possible:
 
-- [client-less C# bot by dkuwahara](https://github.com/dkuwahara/OmegaBot)
-- [a blog post by Eric Carmichael](http://www.ericcarmichael.com/my-diablo-2-botting-phase.html)  
 - [D2BS](https://github.com/noah-/d2bs)
 - Another good resource is the [diablo 2 protocol js library](https://github.com/MephisTools/diablo2-protocol).
 - https://github.com/blizzhackers/kolbot (Data structures and game mechanics)
 - https://github.com/blizzhackers/kolbot-SoloPlay (Solo play strategy  implementation)
 - [Blizzhackers/Diablo2PacketsData](https://github.com/blizzhackers/Diablo2PacketsData)
+- [D2NG clientless bot by dkuwahara](https://github.com/dkuwahara/D2NG)
+- [client-less C# bot by dkuwahara](https://github.com/dkuwahara/OmegaBot)
+- [a blog post by Eric Carmichael](http://www.ericcarmichael.com/my-diablo-2-botting-phase.html)
 - https://github.com/blacha/diablo2  (Network traffic interception and parsing and visualization of game state)
 - https://github.com/OpenDiablo2/OpenDiablo2 (Reverse engineering of game mechanics and data structures, as well as implementation of a custom game client, ARCHIVED)
 - https://github.com/eezstreet/OpenD2 (Reverse engineering of game mechanics and data structures, as well as implementation of a custom game client, ARCHIVED?)

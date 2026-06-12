@@ -94,6 +94,10 @@ pub struct GameMapState {
 /// expose a stable item GUID in the packet envelope. Until the item-stat
 /// bitstream itself is decoded with `ItemStatCost` metadata, the library keeps
 /// these events in arrival order instead of guessing which [`Item`] owns them.
+///
+/// This is intentionally a raw-format exception inside `GameState`; decoded
+/// player, mercenary, and world state should otherwise store semantic game
+/// values rather than wire or save-file encodings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ItemStatUpdate {
     packet_size: u8,
@@ -384,12 +388,14 @@ impl GameState {
         let Some(player) = self.local_player_mut() else {
             return false;
         };
+        let amount = local_stat_value_with_resource_floor(player, stat, amount);
         player.set_stat(stat, amount);
         true
     }
 
     fn set_player_stat(&mut self, unit_id: u32, stat: u16, amount: u32) -> bool {
         let unit_id = self.resolve_player_id(unit_id);
+        let amount = game_state_stat_value(stat, amount);
         if let Some(player) = self.players.get_mut(&unit_id) {
             player.set_stat(stat, amount);
         } else {
@@ -499,14 +505,14 @@ impl GameState {
                 true
             }
             0x01 => {
-                if unit_life > u8::MAX as u16 {
+                let Some(life_percent) = unit_life_percent_from_packet(unit_life) else {
                     return false;
-                }
+                };
                 if let Some(mercenary) = self.mercenaries.get_mut(&unit_id) {
-                    mercenary.set_life_percent(unit_life as u8);
+                    mercenary.set_life_percent(life_percent);
                     true
                 } else if let Some(npc) = self.npcs.get_mut(&unit_id) {
-                    npc.set_life_percent(unit_life as u8);
+                    npc.set_life_percent(life_percent);
                     true
                 } else {
                     false
@@ -537,6 +543,7 @@ impl GameState {
         };
         player.set_vitals(vitals);
         player.set_movement(movement);
+        ensure_resource_maxima_cover_vitals(player);
         true
     }
 
@@ -546,6 +553,7 @@ impl GameState {
         };
         player.set_stamina(stamina);
         player.set_movement(movement);
+        ensure_resource_maxima_cover_vitals(player);
         true
     }
 
@@ -639,16 +647,16 @@ impl GameState {
         true
     }
 
-    fn move_or_create_npc(&mut self, unit_id: u32, location: Coordinate, life: Option<u8>) {
+    fn move_or_create_npc(&mut self, unit_id: u32, location: Coordinate, life_percent: Option<u8>) {
         if let Some(mercenary) = self.mercenaries.get_mut(&unit_id) {
             mercenary.set_location(location);
-            if let Some(life) = life {
-                mercenary.set_life_percent(life);
+            if let Some(life_percent) = life_percent {
+                mercenary.set_life_percent(life_percent);
             }
             return;
         }
 
-        if life == Some(0) {
+        if life_percent == Some(0) {
             self.npcs.remove(&unit_id);
             return;
         }
@@ -657,14 +665,14 @@ impl GameState {
             .entry(unit_id)
             .and_modify(|npc| {
                 npc.set_location(location);
-                if let Some(life) = life {
-                    npc.set_life_percent(life);
+                if let Some(life_percent) = life_percent {
+                    npc.set_life_percent(life_percent);
                 }
             })
             .or_insert_with(|| {
                 let mut npc = Npc::new(unit_id, location);
-                if let Some(life) = life {
-                    npc.set_life_percent(life);
+                if let Some(life_percent) = life_percent {
+                    npc.set_life_percent(life_percent);
                 }
                 npc
             });
@@ -695,6 +703,27 @@ impl GameState {
         }
     }
 
+    fn unit_location(&self, unit_type: u8, unit_id: u32) -> Option<Coordinate> {
+        match unit_type {
+            0x00 => {
+                let player = self.player(unit_id)?;
+                player.world_location_known().then_some(player.location())
+            }
+            0x01 => self
+                .mercenaries
+                .get(&unit_id)
+                .and_then(|mercenary| {
+                    mercenary
+                        .world_location_known()
+                        .then_some(mercenary.location())
+                })
+                .or_else(|| self.npcs.get(&unit_id).map(Entity::location)),
+            0x02 | 0x05 => self.objects.get(&unit_id).map(WorldObject::location),
+            0x03 => self.missiles.get(&unit_id).map(Entity::location),
+            _ => None,
+        }
+    }
+
     fn upsert_missile(&mut self, missile: Missile) {
         self.missiles
             .entry(missile.id())
@@ -709,6 +738,70 @@ impl GameState {
                 existing.pierce_level = missile.pierce_level;
             })
             .or_insert(missile);
+    }
+
+    fn upsert_skill_cast_location(
+        &mut self,
+        attacker_type: u8,
+        attacker_id: u32,
+        skill_id: u16,
+        skill_level: u8,
+        target: Coordinate,
+    ) -> bool {
+        let owner_id = self.resolve_unit_owner_id(attacker_type, attacker_id);
+        let origin = self
+            .unit_location(attacker_type, attacker_id)
+            .unwrap_or(target);
+        let mut marker = Missile::new(
+            skill_cast_marker_id(attacker_type, owner_id, skill_id),
+            origin,
+        );
+        marker.set_class_id(skill_id);
+        marker.set_owner_type(attacker_type);
+        marker.set_owner_id(owner_id);
+        marker.set_skill_level(skill_level);
+        marker.set_target(target);
+        self.upsert_missile(marker);
+        true
+    }
+
+    fn upsert_skill_cast_target(
+        &mut self,
+        attacker_type: u8,
+        attacker_id: u32,
+        skill_id: u16,
+        skill_level: u8,
+        target_type: u8,
+        target_id: u32,
+    ) -> bool {
+        let owner_id = self.resolve_unit_owner_id(attacker_type, attacker_id);
+        let attacker_location = self.unit_location(attacker_type, attacker_id);
+        let target_location = self.unit_location(target_type, target_id);
+        let Some(location) = attacker_location.or(target_location) else {
+            return false;
+        };
+
+        let mut marker = Missile::new(
+            skill_cast_marker_id(attacker_type, owner_id, skill_id),
+            location,
+        );
+        marker.set_class_id(skill_id);
+        marker.set_owner_type(attacker_type);
+        marker.set_owner_id(owner_id);
+        marker.set_skill_level(skill_level);
+        if let Some(target_location) = target_location {
+            marker.set_target(target_location);
+        }
+        self.upsert_missile(marker);
+        true
+    }
+
+    fn resolve_unit_owner_id(&self, unit_type: u8, unit_id: u32) -> u32 {
+        if unit_type == 0x00 {
+            self.resolve_player_id(unit_id)
+        } else {
+            unit_id
+        }
     }
 
     fn upsert_mercenary(
@@ -796,7 +889,7 @@ impl GameState {
         let Some(mercenary) = self.mercenaries.get_mut(&merc_id) else {
             return false;
         };
-        mercenary.set_stat(stat_id, amount);
+        mercenary.set_stat(stat_id, game_state_stat_value(stat_id, amount));
         true
     }
 
@@ -804,7 +897,7 @@ impl GameState {
         let Some(mercenary) = self.mercenaries.get_mut(&merc_id) else {
             return false;
         };
-        mercenary.add_stat(stat_id, amount);
+        mercenary.add_stat(stat_id, game_state_stat_value(stat_id, amount));
         true
     }
 
@@ -865,7 +958,12 @@ impl GameState {
         match unit_type {
             0x00 => self.clear_player_world_location(unit_id),
             0x01 => {
-                self.mercenaries.remove(&unit_id).is_some() || self.npcs.remove(&unit_id).is_some()
+                if let Some(mercenary) = self.mercenaries.get_mut(&unit_id) {
+                    mercenary.clear_world_location();
+                    true
+                } else {
+                    self.npcs.remove(&unit_id).is_some()
+                }
             }
             0x02 | 0x05 => self.objects.remove(&unit_id).is_some(),
             0x03 => self.missiles.remove(&unit_id).is_some(),
@@ -999,6 +1097,10 @@ impl GameState {
         }
     }
 
+    pub fn reset(&mut self) {
+        self.reset_session();
+    }
+
     fn reset_session(&mut self) {
         self.players.clear();
         self.player_aliases.clear();
@@ -1073,6 +1175,10 @@ impl Update for GameState {
                 true
             }
             ServerMessage::GameExitSuccessful => {
+                self.reset_session();
+                true
+            }
+            ServerMessage::GameConnectionTerminated => {
                 self.reset_session();
                 true
             }
@@ -1194,12 +1300,14 @@ impl Update for GameState {
                 unit_id,
                 party_id,
                 character_level,
+                in_party,
                 ..
             } => {
                 let unit_id = self.resolve_player_id(unit_id);
+                let party_affiliation = PartyAffiliation::from_party_info(party_id, in_party);
                 if let Some(player) = self.players.get_mut(&unit_id) {
                     player.set_level(character_level as u32);
-                    player.set_party_id(party_id);
+                    player.set_party_affiliation(party_affiliation);
                     true
                 } else {
                     self.pending_player_stats
@@ -1207,7 +1315,7 @@ impl Update for GameState {
                         .or_default()
                         .insert(UnitStat::Level as u16, character_level as u32);
                     self.pending_player_parties
-                        .insert(unit_id, PartyAffiliation::from_packet_id(party_id));
+                        .insert(unit_id, party_affiliation);
                     true
                 }
             }
@@ -1238,7 +1346,7 @@ impl Update for GameState {
                 if party_state == 0 {
                     self.set_player_party_affiliation(unit_id, PartyAffiliation::Unpartied)
                 } else {
-                    true
+                    self.set_player_party_affiliation(unit_id, PartyAffiliation::LocalParty)
                 }
             }
             ServerMessage::AssignPlayerToParty {
@@ -1275,6 +1383,55 @@ impl Update for GameState {
                 self.upsert_missile(missile);
                 true
             }
+            ServerMessage::UnitSkillOnTarget {
+                unit_type,
+                unit_id,
+                skill_id,
+                skill_level,
+                target_type,
+                target_id,
+                ..
+            }
+            | ServerMessage::SkillTriggerOnTarget {
+                attacker_type: unit_type,
+                attacker_id: unit_id,
+                skill_id,
+                skill_level,
+                target_type,
+                target_id,
+                ..
+            } => self.upsert_skill_cast_target(
+                unit_type,
+                unit_id,
+                skill_id,
+                skill_level,
+                target_type,
+                target_id,
+            ),
+            ServerMessage::UnitSkillOnLocation {
+                unit_type,
+                unit_id,
+                skill: skill_id,
+                skill_level,
+                x: target_x,
+                y: target_y,
+                ..
+            }
+            | ServerMessage::SkillTriggerOnLocation {
+                attacker_type: unit_type,
+                attacker_id: unit_id,
+                skill_id,
+                skill_level,
+                target_x,
+                target_y,
+                ..
+            } => self.upsert_skill_cast_location(
+                unit_type,
+                unit_id,
+                skill_id,
+                skill_level,
+                Coordinate::new(target_x, target_y),
+            ),
             ServerMessage::PlayerCorpseAssign {
                 assign,
                 owner_id,
@@ -1351,12 +1508,15 @@ impl Update for GameState {
                 unit_life,
                 ..
             } => {
-                let life = if state == 0x08 || state == 0x09 {
-                    0
+                let life_percent = if state == 0x08 || state == 0x09 {
+                    Some(0)
                 } else {
-                    unit_life
+                    unit_life_percent_from_packet(unit_life as u16)
                 };
-                self.move_or_create_npc(unit_id, Coordinate::new(x, y), Some(life));
+                let Some(life_percent) = life_percent else {
+                    return false;
+                };
+                self.move_or_create_npc(unit_id, Coordinate::new(x, y), Some(life_percent));
                 if let Some(npc) = self.npcs.get_mut(&unit_id) {
                     npc.set_state(state);
                 }
@@ -1368,17 +1528,23 @@ impl Update for GameState {
                 y,
                 unit_life,
             } => {
-                self.move_or_create_npc(unit_id, Coordinate::new(x, y), Some(unit_life));
+                let Some(life_percent) = unit_life_percent_from_packet(unit_life as u16) else {
+                    return false;
+                };
+                self.move_or_create_npc(unit_id, Coordinate::new(x, y), Some(life_percent));
                 true
             }
             ServerMessage::NpcHeal {
                 unit_id, unit_life, ..
             } => {
+                let Some(life_percent) = unit_life_percent_from_packet(unit_life as u16) else {
+                    return false;
+                };
                 if let Some(mercenary) = self.mercenaries.get_mut(&unit_id) {
-                    mercenary.set_life_percent(unit_life);
+                    mercenary.set_life_percent(life_percent);
                     true
                 } else if let Some(npc) = self.npcs.get_mut(&unit_id) {
-                    npc.set_life_percent(unit_life);
+                    npc.set_life_percent(life_percent);
                     true
                 } else {
                     false
@@ -1392,6 +1558,9 @@ impl Update for GameState {
                 life_percent,
                 ..
             } => {
+                let Some(life_percent) = unit_life_percent_from_packet(life_percent as u16) else {
+                    return false;
+                };
                 if let Some(mercenary) = self.mercenaries.get_mut(&unit_id) {
                     mercenary.set_location(Coordinate::new(unit_x, unit_y));
                     mercenary.set_life_percent(life_percent);
@@ -1539,9 +1708,7 @@ impl Update for GameState {
             }
             ServerMessage::AddExpU8 { amount } => self.add_local_experience(amount as u32),
             ServerMessage::AddExpU16 { amount } => self.add_local_experience(amount as u32),
-            ServerMessage::AddExpU32 { amount } => {
-                self.set_local_stat(UnitStat::Experience as u16, amount)
-            }
+            ServerMessage::AddExpU32 { amount } => self.add_local_experience(amount),
             ServerMessage::SetAttributeU8 { attribute, amount } => {
                 self.set_local_stat(attribute as u16, amount as u32)
             }
@@ -1567,6 +1734,69 @@ fn fixed_c_string(bytes: &[u8]) -> String {
         .position(|&byte| byte == 0)
         .unwrap_or(bytes.len());
     String::from_utf8_lossy(&bytes[..len]).into_owned()
+}
+
+fn game_state_stat_value(stat_id: u16, wire_value: u32) -> u32 {
+    if is_resource_stat(stat_id) {
+        wire_value >> 8
+    } else {
+        wire_value
+    }
+}
+
+fn local_stat_value_with_resource_floor(player: &Player, stat_id: u16, wire_value: u32) -> u32 {
+    let value = game_state_stat_value(stat_id, wire_value);
+    let Some(current) = current_resource_for_max_stat(player.vitals(), stat_id) else {
+        return value;
+    };
+
+    value.max(current)
+}
+
+fn is_resource_stat(stat_id: u16) -> bool {
+    (UnitStat::Life as u16..=UnitStat::StaminaMax as u16).contains(&stat_id)
+}
+
+fn current_resource_for_max_stat(vitals: Option<PlayerVitals>, stat_id: u16) -> Option<u32> {
+    let vitals = vitals?;
+    match stat_id {
+        value if value == UnitStat::LifeMax as u16 => vitals.life().map(u32::from),
+        value if value == UnitStat::ManaMax as u16 => vitals.mana().map(u32::from),
+        value if value == UnitStat::StaminaMax as u16 => vitals.stamina().map(u32::from),
+        _ => None,
+    }
+}
+
+fn ensure_resource_maxima_cover_vitals(player: &mut Player) {
+    for stat_id in [
+        UnitStat::LifeMax as u16,
+        UnitStat::ManaMax as u16,
+        UnitStat::StaminaMax as u16,
+    ] {
+        let Some(current) = current_resource_for_max_stat(player.vitals(), stat_id) else {
+            continue;
+        };
+        if player.stat(stat_id).map_or(true, |max| max < current) {
+            player.set_stat(stat_id, current);
+        }
+    }
+}
+
+fn unit_life_percent_from_packet(packet_value: u16) -> Option<u8> {
+    PartyLifeFraction::from_packet_value(packet_value).map(PartyLifeFraction::percent_rounded)
+}
+
+fn skill_cast_marker_id(unit_type: u8, unit_id: u32, skill_id: u16) -> u32 {
+    let mut hash = 0x811C_9DC5u32;
+    for byte in [unit_type]
+        .into_iter()
+        .chain(unit_id.to_le_bytes())
+        .chain(skill_id.to_le_bytes())
+    {
+        hash ^= byte as u32;
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash | 0x8000_0000
 }
 
 fn decode_hpmp_update(raw: &[u8; 14]) -> Option<(PlayerVitals, PlayerMovement)> {
@@ -1638,6 +1868,7 @@ impl<'a> StatusBitReader<'a> {
 
 #[cfg(test)]
 mod tests {
+    use super::skill_cast_marker_id;
     use crate::core::entity::Entity;
     use crate::core::network::d2gs::D2GSPacket;
     use crate::core::quest::{QuestLogEntry, QuestLogEntryState};
@@ -1762,6 +1993,29 @@ mod tests {
     }
 
     #[test]
+    fn player_party_info_marks_local_party_when_party_id_is_not_assigned_yet() {
+        let mut state = GameState::default();
+        state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: 1,
+            szname: *b"Joan\0\0\0\0\0\0\0\0\0\0\0\0",
+            x: 10,
+            y: 20,
+        });
+
+        assert!(state.update(ServerMessage::PlayerPartyInfo {
+            unit_id: 7,
+            party_id: 0xffff,
+            character_level: 88,
+            relationship: 0,
+            in_party: 1,
+        }));
+
+        let player = state.player(7).expect("player exists");
+        assert_eq!(player.party_affiliation(), PartyAffiliation::LocalParty);
+    }
+
+    #[test]
     fn party_assignment_packets_update_player_affiliation() {
         let mut state = GameState::default();
         assert!(state.update(ServerMessage::PlayerJoined {
@@ -1792,6 +2046,14 @@ mod tests {
 
         let player = state.player(7).expect("player exists");
         assert_eq!(player.party_affiliation(), PartyAffiliation::Unpartied);
+
+        assert!(state.update(ServerMessage::PlayerPartyUpdate {
+            unit_id: 7,
+            party_state: 1,
+        }));
+
+        let player = state.player(7).expect("player exists");
+        assert_eq!(player.party_affiliation(), PartyAffiliation::LocalParty);
     }
 
     #[test]
@@ -1813,6 +2075,69 @@ mod tests {
 
         let player = state.player(7).expect("player exists");
         assert_eq!(player.level(), 42);
+    }
+
+    #[test]
+    fn resource_stat_updates_are_stored_as_game_values() {
+        let mut state = GameState::default();
+        state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: 1,
+            szname: *b"Joan\0\0\0\0\0\0\0\0\0\0\0\0",
+            x: 10,
+            y: 20,
+        });
+        mark_local(&mut state, 7);
+
+        assert!(state.update(ServerMessage::SetAttributeU16 {
+            attribute: UnitStat::LifeMax as u8,
+            amount: 66 * 256,
+        }));
+        assert!(state.update(ServerMessage::SetAttributeU16 {
+            attribute: UnitStat::ManaMax as u8,
+            amount: 35 * 256,
+        }));
+
+        let player = state.player(7).expect("player exists");
+        assert_eq!(player.stat(UnitStat::LifeMax as u16), Some(66));
+        assert_eq!(player.stat(UnitStat::ManaMax as u16), Some(35));
+    }
+
+    #[test]
+    fn local_vitals_raise_resource_max_floor() {
+        let mut state = GameState::default();
+        state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: 1,
+            szname: *b"Joan\0\0\0\0\0\0\0\0\0\0\0\0",
+            x: 10,
+            y: 20,
+        });
+        mark_local(&mut state, 7);
+
+        assert!(state.update(ServerMessage::SetAttributeU16 {
+            attribute: UnitStat::LifeMax as u8,
+            amount: 97 * 256,
+        }));
+        assert!(state.update(ServerMessage::LifeManaUpdate {
+            bitfield: status_bitfield::<12>(&[
+                (101, 15),
+                (35, 15),
+                (80, 15),
+                (10, 16),
+                (20, 16),
+                (0, 8),
+                (0, 8),
+            ]),
+        }));
+        assert!(state.update(ServerMessage::SetAttributeU16 {
+            attribute: UnitStat::LifeMax as u8,
+            amount: 97 * 256,
+        }));
+
+        let player = state.player(7).expect("player exists");
+        assert_eq!(player.vitals().and_then(|vitals| vitals.life()), Some(101));
+        assert_eq!(player.stat(UnitStat::LifeMax as u16), Some(101));
     }
 
     #[test]
@@ -1918,6 +2243,36 @@ mod tests {
     }
 
     #[test]
+    fn ally_party_info_normalizes_mercenary_life_from_128_scale() {
+        let mut state = GameState::default();
+        assert!(state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: 1,
+            szname: name16("Owner"),
+            x: 10,
+            y: 20,
+        }));
+        assert!(state.update(ServerMessage::AssignMerc {
+            skill_id: 0x0A,
+            summon_type: 0x0152,
+            player_id: 7,
+            merc_id: 0x5566_7788,
+            seed2: 0x99AA_BBCC,
+            init_seed: 0xDDEE_FF00,
+        }));
+
+        assert!(state.update(ServerMessage::AllyPartyInfo {
+            unit_type: 1,
+            unit_life: 128,
+            unit_id: 0x5566_7788,
+            unit_area: 2,
+        }));
+
+        let mercenary = state.mercenary(0x5566_7788).expect("merc exists");
+        assert_eq!(mercenary.life_percent(), Some(100));
+    }
+
+    #[test]
     fn early_player_stat_updates_apply_after_player_alias_is_known() {
         let mut state = GameState::default();
         assert!(state.update(ServerMessage::PlayerJoined {
@@ -1932,7 +2287,7 @@ mod tests {
         assert!(state.update(ServerMessage::AttributeUpdate {
             unit_id: 0x2000,
             attribute: UnitStat::Mana as u8,
-            amount: 320,
+            amount: 320 * 256,
         }));
 
         assert!(state.update(ServerMessage::AssignPlayer {
@@ -1980,7 +2335,44 @@ mod tests {
         let mercenary = state.mercenary(0x5566_7788).expect("merc exists");
         assert_eq!(mercenary.location(), Coordinate::new(5200, 5100));
         assert!(mercenary.world_location_known());
-        assert_eq!(mercenary.life_percent(), Some(73));
+        assert_eq!(mercenary.life_percent(), Some(57));
+    }
+
+    #[test]
+    fn remove_object_for_known_mercenary_clears_visibility_but_keeps_assignment() {
+        let mut state = GameState::default();
+        state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: 1,
+            szname: name16("Owner"),
+            x: 10,
+            y: 20,
+        });
+        assert!(state.update(ServerMessage::AssignMerc {
+            skill_id: 0x0A,
+            summon_type: 0x0152,
+            player_id: 7,
+            merc_id: 0x5566_7788,
+            seed2: 0x99AA_BBCC,
+            init_seed: 0xDDEE_FF00,
+        }));
+        assert!(state.update(ServerMessage::NpcStop {
+            unit_id: 0x5566_7788,
+            x: 5200,
+            y: 5100,
+            unit_life: 73,
+        }));
+
+        assert!(state.update(ServerMessage::RemoveObject {
+            unit_type: 1,
+            unit_id: 0x5566_7788,
+        }));
+
+        let player = state.player(7).expect("owner remains");
+        assert_eq!(player.mercenary_id(), 0x5566_7788);
+        let mercenary = state.mercenary(0x5566_7788).expect("merc remains");
+        assert!(!mercenary.world_location_known());
+        assert_eq!(mercenary.life_percent(), Some(57));
     }
 
     #[test]
@@ -2072,6 +2464,24 @@ mod tests {
         assert!(state.players().is_empty());
         assert_eq!(state.local_player_id(), None);
         assert!(state.map().revealed_tiles.is_empty());
+    }
+
+    #[test]
+    fn game_connection_terminated_clears_player_roster_and_local_identity() {
+        let mut state = GameState::default();
+        state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: 1,
+            szname: *b"Joan\0\0\0\0\0\0\0\0\0\0\0\0",
+            x: 10,
+            y: 20,
+        });
+        mark_local(&mut state, 7);
+
+        assert!(state.update(ServerMessage::GameConnectionTerminated));
+
+        assert!(state.players().is_empty());
+        assert_eq!(state.local_player_id(), None);
     }
 
     #[test]
@@ -2506,7 +2916,7 @@ mod tests {
             unit_code: 156,
             unit_x: 300,
             unit_y: 301,
-            life_percent: 100,
+            life_percent: 128,
             packet_size: 13,
             bitstream: Vec::new(),
         }));
@@ -2537,7 +2947,7 @@ mod tests {
         packet.extend_from_slice(&156u16.to_le_bytes());
         packet.extend_from_slice(&300u16.to_le_bytes());
         packet.extend_from_slice(&301u16.to_le_bytes());
-        packet.push(100);
+        packet.push(128);
         packet.push(13);
 
         let applied = state
@@ -2566,7 +2976,7 @@ mod tests {
             unit_code: 156,
             unit_x: 300,
             unit_y: 301,
-            life_percent: 100,
+            life_percent: 128,
             packet_size: 13,
             bitstream: Vec::new(),
         });
@@ -2757,6 +3167,61 @@ mod tests {
     }
 
     #[test]
+    fn skill_cast_packets_create_map_visible_spell_markers() {
+        let mut state = GameState::default();
+        assert!(state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: 1,
+            szname: name16("Caster"),
+            x: 5200,
+            y: 5100,
+        }));
+        assert!(state.update(ServerMessage::MonsterAssign {
+            unit_id: 55,
+            unit_code: 156,
+            unit_x: 5220,
+            unit_y: 5120,
+            life_percent: 128,
+            packet_size: 13,
+            bitstream: Vec::new(),
+        }));
+
+        assert!(state.update(ServerMessage::SkillTriggerOnLocation {
+            attacker_type: 0,
+            attacker_id: 7,
+            skill_id: 330,
+            unused: 0,
+            skill_level: 4,
+            target_x: 5230,
+            target_y: 5130,
+            unused2: 0,
+        }));
+
+        let marker_id = skill_cast_marker_id(0, 7, 330);
+        let marker = state.missile(marker_id).expect("location spell marker");
+        assert_eq!(marker.location(), Coordinate::new(5200, 5100));
+        assert_eq!(marker.target(), Some(Coordinate::new(5230, 5130)));
+        assert_eq!(marker.class_id(), Some(330));
+        assert_eq!(marker.owner_id(), Some(7));
+        assert_eq!(marker.skill_level(), Some(4));
+
+        assert!(state.update(ServerMessage::SkillTriggerOnTarget {
+            attacker_type: 0,
+            attacker_id: 7,
+            skill_id: 330,
+            skill_level: 5,
+            target_type: 1,
+            target_id: 55,
+            unused: 0,
+        }));
+
+        let marker = state.missile(marker_id).expect("target spell marker");
+        assert_eq!(marker.location(), Coordinate::new(5200, 5100));
+        assert_eq!(marker.target(), Some(Coordinate::new(5220, 5120)));
+        assert_eq!(marker.skill_level(), Some(5));
+    }
+
+    #[test]
     fn merc_packets_parse_and_update_assignment_stats_and_revive_info() {
         let mut state = GameState::default();
         state.update(ServerMessage::AssignPlayer {
@@ -2885,7 +3350,7 @@ mod tests {
             unit_code: 156,
             unit_x: 300,
             unit_y: 301,
-            life_percent: 100,
+            life_percent: 128,
             packet_size: 13,
             bitstream: Vec::new(),
         });
@@ -2916,12 +3381,16 @@ mod tests {
             attribute: UnitStat::Strength as u8,
             amount: 50,
         }));
+        assert!(state.update(ServerMessage::SetAttributeU32 {
+            attribute: UnitStat::Experience as u8,
+            amount: 10_000,
+        }));
         assert!(state.update(ServerMessage::AddExpU16 { amount: 25 }));
         assert!(state.update(ServerMessage::AddExpU32 { amount: 1000 }));
 
         let player = state.player(7).expect("player exists");
         assert_eq!(player.stat(UnitStat::Strength as u16), Some(50));
-        assert_eq!(player.stat(UnitStat::Experience as u16), Some(1000));
+        assert_eq!(player.stat(UnitStat::Experience as u16), Some(11_025));
     }
 
     #[test]

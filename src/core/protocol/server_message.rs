@@ -1704,6 +1704,31 @@ impl ServerMessage {
                     bitfield: cursor.array(),
                 })
             }
+            0x99 => {
+                let mut cursor = PacketCursor::new(input, 16)?;
+                Ok(Self::SkillTriggerOnTarget {
+                    attacker_type: cursor.u8(),
+                    attacker_id: cursor.u32_le(),
+                    skill_id: cursor.u16_le(),
+                    skill_level: cursor.u8(),
+                    target_type: cursor.u8(),
+                    target_id: cursor.u32_le(),
+                    unused: cursor.u16_le(),
+                })
+            }
+            0x9A => {
+                let mut cursor = PacketCursor::new(input, 17)?;
+                Ok(Self::SkillTriggerOnLocation {
+                    attacker_type: cursor.u8(),
+                    attacker_id: cursor.u32_le(),
+                    skill_id: cursor.u16_le(),
+                    unused: cursor.u16_le(),
+                    skill_level: cursor.u8(),
+                    target_x: cursor.u16_le(),
+                    target_y: cursor.u16_le(),
+                    unused2: cursor.u16_le(),
+                })
+            }
             0x9C => {
                 let mut cursor = PacketCursor::new_variable(input, 8, 2)?;
                 let action = cursor.u8();
@@ -2544,6 +2569,41 @@ mod tests {
                 x: 3791,
                 y: 5118,
                 unknown2: 0,
+            }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[
+                0x99, 0x01, 0x11, 0x00, 0x00, 0x00, 0x4A, 0x01, 0x04, 0x00, 0xC3, 0x38, 0xB6, 0x70,
+                0x00, 0x00,
+            ])
+            .expect("skill trigger on target should parse"),
+            ServerMessage::SkillTriggerOnTarget {
+                attacker_type: 1,
+                attacker_id: 0x11,
+                skill_id: 330,
+                skill_level: 4,
+                target_type: 0,
+                target_id: 0x70B6_38C3,
+                unused: 0,
+            }
+        );
+
+        assert_eq!(
+            ServerMessage::parse(&[
+                0x9A, 0x01, 0x11, 0x00, 0x00, 0x00, 0x4A, 0x01, 0x00, 0x00, 0x04, 0xCF, 0x0E, 0xFE,
+                0x13, 0x00, 0x00,
+            ])
+            .expect("skill trigger on location should parse"),
+            ServerMessage::SkillTriggerOnLocation {
+                attacker_type: 1,
+                attacker_id: 0x11,
+                skill_id: 330,
+                unused: 0,
+                skill_level: 4,
+                target_x: 3791,
+                target_y: 5118,
+                unused2: 0,
             }
         );
 
