@@ -1,21 +1,20 @@
 // Player struct
 
-use std::collections::HashMap;
-
 use crate::ServerMessage;
 use crate::core::character_class::CharacterClass;
 use crate::core::coordinate::Coordinate;
 use crate::core::entity::Entity;
 use crate::core::unit_stat::UnitStat;
 use crate::core::update::Update;
+use std::collections::HashMap;
 
 /// Current local-player resource values decoded from D2GS HP/MP packets.
 ///
 /// Diablo II does not send these live values as ordinary `UnitStat` updates.
 /// Server packets `0x18` and `0x95` use a compact bitstream with 15-bit life,
 /// mana, and stamina fields; `0x96` refreshes stamina without life/mana; `0x18`
-/// additionally carries 7-bit regeneration counters. The values are kept as raw
-/// packet units here. Converting them to UI percentages requires the
+/// additionally carries 7-bit regeneration counters. These values are stored as
+/// game-facing integers. Converting them to UI percentages requires the
 /// corresponding max-life/max-mana/max-stamina stats, which may arrive through
 /// different packets or save/static data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,6 +183,7 @@ pub enum PartyAffiliation {
     #[default]
     Unknown,
     Unpartied,
+    LocalParty,
     Party(PartyId),
 }
 
@@ -196,15 +196,25 @@ impl PartyAffiliation {
         }
     }
 
+    pub const fn from_party_info(party_id: u16, in_party: u16) -> Self {
+        if party_id != UNPARTIED_PACKET_ID {
+            Self::Party(PartyId::new(party_id))
+        } else if in_party != 0 {
+            Self::LocalParty
+        } else {
+            Self::Unpartied
+        }
+    }
+
     pub const fn party_id(self) -> Option<PartyId> {
         match self {
             Self::Party(party_id) => Some(party_id),
-            Self::Unknown | Self::Unpartied => None,
+            Self::Unknown | Self::Unpartied | Self::LocalParty => None,
         }
     }
 
     pub const fn is_partied(self) -> bool {
-        matches!(self, Self::Party(_))
+        matches!(self, Self::LocalParty | Self::Party(_))
     }
 }
 

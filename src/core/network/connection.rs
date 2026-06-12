@@ -102,6 +102,13 @@ pub enum CaptureInterfaceSelectionReason {
     Fallback,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum D2gsSessionResetReason {
+    NewTcpStream,
+    TcpReset,
+    TcpFin,
+}
+
 #[derive(Debug, Clone)]
 pub struct CaptureInterfaceSelection {
     pub interface: NetworkInterface,
@@ -111,6 +118,9 @@ pub struct CaptureInterfaceSelection {
 /// Non-packet diagnostic emitted by [`Connection`] during live capture.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionTransportWarning {
+    /// The observed D2GS TCP session ended or a new one began, so accumulated
+    /// game state was cleared.
+    D2gsSessionReset { reason: D2gsSessionResetReason },
     /// A TCP retransmission was fully behind the already-consumed byte stream.
     DuplicateTcpSegment {
         sequence: u32,
@@ -731,18 +741,43 @@ impl Connection {
     ) where
         F: FnMut(ConnectionEvent, &GameState),
     {
-        if self.d2gs_tcp_stream_key.as_ref() != Some(&stream_key)
-            || tcp_flags & (TcpFlags::SYN | TcpFlags::RST) != 0
-        {
+        let new_stream = self.d2gs_tcp_stream_key.as_ref() != Some(&stream_key);
+        let reset_reason = if new_stream {
+            Some(D2gsSessionResetReason::NewTcpStream)
+        } else if tcp_flags & TcpFlags::RST != 0 {
+            Some(D2gsSessionResetReason::TcpReset)
+        } else if tcp_flags & TcpFlags::SYN != 0 {
+            Some(D2gsSessionResetReason::NewTcpStream)
+        } else {
+            None
+        };
+
+        if let Some(reason) = reset_reason {
             self.d2gs_tcp_stream.reset();
             self.d2gs_reader.reset();
             self.d2gs_tcp_stream_key = Some(stream_key);
+            game_state.reset_session();
+            on_event(
+                ConnectionEvent::TransportWarning {
+                    warning: ConnectionTransportWarning::D2gsSessionReset { reason },
+                },
+                game_state,
+            );
         }
 
         if payload.is_empty() {
             if tcp_flags & TcpFlags::FIN != 0 {
                 self.d2gs_tcp_stream.reset();
                 self.d2gs_reader.reset();
+                game_state.reset_session();
+                on_event(
+                    ConnectionEvent::TransportWarning {
+                        warning: ConnectionTransportWarning::D2gsSessionReset {
+                            reason: D2gsSessionResetReason::TcpFin,
+                        },
+                    },
+                    game_state,
+                );
             }
             return;
         }
@@ -768,6 +803,15 @@ impl Connection {
         if tcp_flags & TcpFlags::FIN != 0 {
             self.d2gs_tcp_stream.reset();
             self.d2gs_reader.reset();
+            game_state.reset_session();
+            on_event(
+                ConnectionEvent::TransportWarning {
+                    warning: ConnectionTransportWarning::D2gsSessionReset {
+                        reason: D2gsSessionResetReason::TcpFin,
+                    },
+                },
+                game_state,
+            );
         }
     }
 
@@ -869,14 +913,16 @@ where
 mod tests {
     use super::{
         CaptureInterfaceSelectionReason, CapturedTransport, Connection, ConnectionEvent,
-        ConnectionTransportWarning, D2R_BNET_PORT, LEGACY_D2GS_PORT, MAX_BUFFERED_D2GS_BYTES,
-        classify_transport,
+        ConnectionTransportWarning, D2R_BNET_PORT, D2gsSessionResetReason, LEGACY_D2GS_PORT,
+        MAX_BUFFERED_D2GS_BYTES, classify_transport,
     };
     use crate::ServerMessage;
     use crate::core::game_state::GameState;
     use crate::core::protocol::server_message::ServerMessageParseError;
+    use crate::core::update::Update;
     use pnet::datalink::NetworkInterface;
     use pnet::ipnetwork::IpNetwork;
+    use pnet::packet::tcp::TcpFlags;
     use std::net::{IpAddr, Ipv4Addr};
 
     #[test]
@@ -1042,6 +1088,48 @@ mod tests {
             }
         )));
         assert!(!state.map().revealed_tiles.is_empty());
+    }
+
+    #[test]
+    fn live_tcp_new_stream_clears_stale_game_state_and_emits_event() {
+        let mut connection = Connection::new();
+        let mut state = GameState::default();
+        assert!(state.update(ServerMessage::AssignPlayer {
+            unit_id: 7,
+            class: 1,
+            szname: *b"Stale\0\0\0\0\0\0\0\0\0\0\0",
+            x: 10,
+            y: 20,
+        }));
+        let key = super::TcpStreamKey::new(
+            "10.0.0.1".parse().unwrap(),
+            "10.0.0.2".parse().unwrap(),
+            LEGACY_D2GS_PORT,
+            51_000,
+        );
+        let mut events = Vec::new();
+
+        connection.read_legacy_d2gs_tcp_segment(
+            key,
+            TcpFlags::SYN,
+            100,
+            &[],
+            &mut state,
+            &mut |event, game_state| {
+                assert!(game_state.players().is_empty());
+                events.push(event);
+            },
+        );
+
+        assert!(state.players().is_empty());
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ConnectionEvent::TransportWarning {
+                warning: ConnectionTransportWarning::D2gsSessionReset {
+                    reason: D2gsSessionResetReason::NewTcpStream
+                }
+            }
+        )));
     }
 
     #[test]

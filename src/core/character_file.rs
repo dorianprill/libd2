@@ -840,30 +840,70 @@ fn legacy_character_stats_from_player(player: &Player) -> Vec<(CharacterStat, u3
             continue;
         };
         if let Some(value) = player.stat(id) {
-            stats.push((stat, value));
+            stats.push((stat, legacy_save_stat_value(stat, value)));
         }
     }
 
     if let Some(vitals) = player.vitals() {
         if let Some(life) = vitals.life() {
-            insert_stat_if_absent(&mut stats, CharacterStat::HitPoints, life as u32);
+            insert_stat_if_absent(
+                &mut stats,
+                CharacterStat::HitPoints,
+                legacy_save_stat_value(CharacterStat::HitPoints, life as u32),
+            );
         }
         if let Some(mana) = vitals.mana() {
-            insert_stat_if_absent(&mut stats, CharacterStat::Mana, mana as u32);
+            insert_stat_if_absent(
+                &mut stats,
+                CharacterStat::Mana,
+                legacy_save_stat_value(CharacterStat::Mana, mana as u32),
+            );
         }
         if let Some(stamina) = vitals.stamina() {
-            insert_stat_if_absent(&mut stats, CharacterStat::Stamina, stamina as u32);
+            insert_stat_if_absent(
+                &mut stats,
+                CharacterStat::Stamina,
+                legacy_save_stat_value(CharacterStat::Stamina, stamina as u32),
+            );
         }
     }
 
     if let Some(max_life) = player.stat(UnitStat::LifeMax as u16) {
-        upsert_stat(&mut stats, CharacterStat::HitPoints, max_life);
+        upsert_stat(
+            &mut stats,
+            CharacterStat::HitPoints,
+            legacy_save_stat_value(CharacterStat::HitPoints, max_life),
+        );
     }
     if let Some(max_mana) = player.stat(UnitStat::ManaMax as u16) {
-        upsert_stat(&mut stats, CharacterStat::Mana, max_mana);
+        upsert_stat(
+            &mut stats,
+            CharacterStat::Mana,
+            legacy_save_stat_value(CharacterStat::Mana, max_mana),
+        );
     }
 
     stats
+}
+
+fn legacy_save_stat_value(stat: CharacterStat, value: u32) -> u32 {
+    if is_legacy_resource_stat(stat) {
+        value.checked_mul(1 << 8).unwrap_or(u32::MAX)
+    } else {
+        value
+    }
+}
+
+fn is_legacy_resource_stat(stat: CharacterStat) -> bool {
+    matches!(
+        stat,
+        CharacterStat::HitPoints
+            | CharacterStat::MaxHitPoints
+            | CharacterStat::Mana
+            | CharacterStat::MaxMana
+            | CharacterStat::Stamina
+            | CharacterStat::MaxStamina
+    )
 }
 
 fn validate_legacy_character_name(name: &str) -> Result<(), CharacterExportError> {

@@ -44,7 +44,8 @@ pub use crate::core::mpq::{
 };
 pub use crate::core::network::connection::{
     CaptureInterfaceSelection, CaptureInterfaceSelectionReason, Connection, ConnectionEvent,
-    ConnectionTransportWarning, D2gsBufferSnapshot, route_probe_local_ip, select_capture_interface,
+    ConnectionTransportWarning, D2gsBufferSnapshot, D2gsSessionResetReason, route_probe_local_ip,
+    select_capture_interface,
 };
 pub use crate::core::network::d2gs::D2GSPacket;
 pub use crate::core::object::WorldObject;
