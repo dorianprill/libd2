@@ -17,6 +17,7 @@ use crate::core::protocol::server_message::{ServerMessageParseError, SkillDescri
 use crate::core::quest::PlayerQuestLog;
 use crate::core::unit_stat::UnitStat;
 use crate::core::update::Update;
+use crate::core::waypoint::PlayerWaypointState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GameServerType {
@@ -49,6 +50,14 @@ impl Difficulty {
             1 => Some(Self::Nightmare),
             2 => Some(Self::Hell),
             _ => None,
+        }
+    }
+
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Normal => 0,
+            Self::Nightmare => 1,
+            Self::Hell => 2,
         }
     }
 }
@@ -229,6 +238,7 @@ pub struct GameState {
     pub(crate) map: GameMapState,
     pub(crate) local_player_id: Option<u32>,
     pub(crate) player_quest_log: Option<PlayerQuestLog>,
+    pub(crate) player_waypoints: PlayerWaypointState,
     pub(crate) is_expansion: bool,
     pub(crate) is_ladder: bool,
     pub(crate) is_hardcore: bool,
@@ -256,6 +266,7 @@ impl GameState {
             map: GameMapState::default(),
             local_player_id: None,
             player_quest_log: None,
+            player_waypoints: PlayerWaypointState::default(),
             is_expansion: false,
             is_ladder: false,
             is_hardcore: false,
@@ -347,6 +358,10 @@ impl GameState {
         self.player_quest_log.as_ref()
     }
 
+    pub fn player_waypoints(&self) -> &PlayerWaypointState {
+        &self.player_waypoints
+    }
+
     pub fn difficulty(&self) -> Difficulty {
         self.difficulty
     }
@@ -412,10 +427,10 @@ impl GameState {
             .pending_player_stats
             .remove(&unit_id)
             .unwrap_or_default();
-        if unit_id != canonical_id {
-            if let Some(canonical_pending) = self.pending_player_stats.remove(&canonical_id) {
-                pending.extend(canonical_pending);
-            }
+        if unit_id != canonical_id
+            && let Some(canonical_pending) = self.pending_player_stats.remove(&canonical_id)
+        {
+            pending.extend(canonical_pending);
         }
         if !pending.is_empty() {
             if let Some(player) = self.players.get_mut(&canonical_id) {
@@ -495,10 +510,7 @@ impl GameState {
                     player.set_remote_party_life(life);
                     player.set_remote_party_area_id(unit_area);
                 } else {
-                    let pending = self
-                        .pending_remote_party_info
-                        .entry(unit_id)
-                        .or_insert_with(RemotePartyInfo::default);
+                    let pending = self.pending_remote_party_info.entry(unit_id).or_default();
                     pending.set_life(life);
                     pending.set_area_id(unit_area);
                 }
@@ -1118,6 +1130,7 @@ impl GameState {
         self.map = GameMapState::default();
         self.local_player_id = None;
         self.player_quest_log = None;
+        self.player_waypoints = PlayerWaypointState::default();
     }
 }
 
@@ -1473,6 +1486,9 @@ impl Update for GameState {
                 self.player_quest_log = Some(PlayerQuestLog::new(quest_bits));
                 true
             }
+            ServerMessage::WaypointMenu { waypoint_bits, .. } => self
+                .player_waypoints
+                .set_difficulty_from_menu_bits(self.difficulty.index(), waypoint_bits),
             ServerMessage::NpcMove {
                 unit_id,
                 target_x,
@@ -1776,7 +1792,7 @@ fn ensure_resource_maxima_cover_vitals(player: &mut Player) {
         let Some(current) = current_resource_for_max_stat(player.vitals(), stat_id) else {
             continue;
         };
-        if player.stat(stat_id).map_or(true, |max| max < current) {
+        if player.stat(stat_id).is_none_or(|max| max < current) {
             player.set_stat(stat_id, current);
         }
     }
@@ -3459,6 +3475,29 @@ mod tests {
 
         assert!(state.update(ServerMessage::GameLoading));
         assert!(state.player_quest_log().is_none());
+    }
+
+    #[test]
+    fn waypoint_menu_updates_current_difficulty_waypoint_state() {
+        let mut state = GameState::default();
+        assert!(state.update(ServerMessage::GameFlags {
+            difficulty: 1,
+            arena_flags: 0,
+            is_expansion: 1,
+            is_ladder: 0,
+        }));
+
+        assert!(state.update(ServerMessage::WaypointMenu {
+            unit_id: 0x1000,
+            unknown: 0,
+            waypoint_bits: [0b0000_0001, 0, 0, 0, 0b0100_0000, 0, 0, 0],
+            unused: [0; 6],
+        }));
+
+        assert!(!state.player_waypoints().difficulty(0).unwrap()[0]);
+        assert!(state.player_waypoints().difficulty(1).unwrap()[0]);
+        assert!(state.player_waypoints().difficulty(1).unwrap()[38]);
+        assert!(!state.player_waypoints().difficulty(2).unwrap()[0]);
     }
 
     fn mark_local(state: &mut GameState, unit_id: u32) {

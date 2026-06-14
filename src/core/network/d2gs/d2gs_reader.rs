@@ -51,10 +51,6 @@ impl D2GSReader {
         }
     }
 
-    pub fn next(&mut self) -> Option<D2GSPacket> {
-        self.packets.pop_front()
-    }
-
     /// Clears queued packets and any partial D2GS packet bytes.
     ///
     /// Use this when a D2GS TCP session ends or restarts. For recovery inside
@@ -212,6 +208,14 @@ impl D2GSReader {
         }
     }
 } // impl D2GSReader
+
+impl Iterator for D2GSReader {
+    type Item = D2GSPacket;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.packets.pop_front()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PacketStreamSource {
@@ -372,7 +376,7 @@ mod tests {
 
     fn drain_packet_lengths(reader: &mut D2GSReader) -> Vec<usize> {
         let mut lengths = Vec::new();
-        while let Some(packet) = reader.next() {
+        for packet in reader.by_ref() {
             lengths.push(packet.data.len());
         }
         lengths
@@ -380,7 +384,7 @@ mod tests {
 
     fn drain_packets(reader: &mut D2GSReader) -> Vec<Vec<u8>> {
         let mut packets = Vec::new();
-        while let Some(packet) = reader.next() {
+        for packet in reader.by_ref() {
             packets.push(packet.data);
         }
         packets

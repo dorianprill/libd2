@@ -318,16 +318,15 @@ fn select_capture_interface_for_route_ip(
     interfaces: &[NetworkInterface],
     route_ip: Option<IpAddr>,
 ) -> Option<CaptureInterfaceSelection> {
-    if let Some(local_ip) = route_ip {
-        if let Some(interface) = interfaces
+    if let Some(local_ip) = route_ip
+        && let Some(interface) = interfaces
             .iter()
             .find(|interface| interface_has_ip(interface, local_ip) && !interface.is_loopback())
-        {
-            return Some(CaptureInterfaceSelection {
-                interface: interface.clone(),
-                reason: CaptureInterfaceSelectionReason::RouteProbe { local_ip },
-            });
-        }
+    {
+        return Some(CaptureInterfaceSelection {
+            interface: interface.clone(),
+            reason: CaptureInterfaceSelectionReason::RouteProbe { local_ip },
+        });
     }
 
     interfaces
@@ -615,7 +614,6 @@ impl Connection {
 
     fn handle_transport_protocol<F>(
         &mut self,
-        _interface_name: &str,
         source: IpAddr,
         destination: IpAddr,
         protocol: IpNextHeaderProtocol,
@@ -648,7 +646,6 @@ impl Connection {
         let header = Ipv4Packet::new(ethernet.payload());
         if let Some(header) = header {
             self.handle_transport_protocol(
-                interface_name,
                 IpAddr::V4(header.get_source()),
                 IpAddr::V4(header.get_destination()),
                 header.get_next_level_protocol(),
@@ -673,7 +670,6 @@ impl Connection {
         let header = Ipv6Packet::new(ethernet.payload());
         if let Some(header) = header {
             self.handle_transport_protocol(
-                interface_name,
                 IpAddr::V6(header.get_source()),
                 IpAddr::V6(header.get_destination()),
                 header.get_next_header(),
@@ -914,7 +910,7 @@ where
     F: FnMut(ConnectionEvent, &mut GameState),
 {
     let mut emitted_packet = false;
-    while let Some(packet) = reader.next() {
+    for packet in reader.by_ref() {
         emitted_packet = true;
         match ServerMessage::try_from(&packet) {
             Ok(message) => {

@@ -1,7 +1,7 @@
+use crate::ServerMessage;
 use crate::core::coordinate::Coordinate;
 use crate::core::entity::Entity;
 use crate::core::update::Update;
-use crate::ServerMessage;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Missile {

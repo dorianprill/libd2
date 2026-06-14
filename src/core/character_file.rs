@@ -10,7 +10,8 @@ use crate::core::game_state::GameState;
 use crate::core::inventory::InventoryProfile;
 use crate::core::object::item::{Item, ItemContainer, ItemDestination, ItemOwner, ItemQuality};
 use crate::core::unit_stat::UnitStat;
-use crate::core::version::{detect_edition, CharacterStatus, GameEdition, SaveVersion};
+use crate::core::version::{CharacterStatus, GameEdition, SaveVersion, detect_edition};
+use crate::core::{quest, waypoint};
 
 const D2S_MAGIC: u32 = 0xaa55_aa55;
 const VERSION_OFFSET: usize = 0x04;
@@ -158,6 +159,7 @@ impl CharacterStats {
     pub fn get(&self, stat: CharacterStat) -> Option<u32> {
         self.entries
             .iter()
+            .rev()
             .find(|entry| entry.stat == Some(stat))
             .map(|entry| entry.value)
     }
@@ -289,8 +291,7 @@ pub struct CharacterFile {
 /// captured in D2GS `0x94 PlayerSkillsInfo`. Tests and recovery tools can still
 /// supply an explicit table when they need to preserve fixture bytes or when a
 /// capture did not include the skill-list packet.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CharacterExportOptions {
     skills: Option<[u8; 30]>,
 }
@@ -316,7 +317,6 @@ impl CharacterExportOptions {
         self.skills.as_ref()
     }
 }
-
 
 impl CharacterFile {
     pub fn parse(bytes: impl Into<Vec<u8>>) -> Result<Self, CharacterFileError> {
@@ -688,10 +688,10 @@ fn parse_character_stats(raw: &[u8], layout: CharacterHeaderLayout) -> Character
             break;
         }
 
-        let Some(stat) = CharacterStat::from_id(id as u16) else {
-            break;
-        };
-        let width = stat.bit_width() as usize;
+        let stat = CharacterStat::from_id(id as u16);
+        let width = stat
+            .map(|stat| stat.bit_width() as usize)
+            .unwrap_or_else(|| character_stat_save_width(id as u16));
         if bit_offset + width > total_bits {
             break;
         }
@@ -702,7 +702,7 @@ fn parse_character_stats(raw: &[u8], layout: CharacterHeaderLayout) -> Character
         bit_offset += width;
         entries.push(CharacterStatEntry {
             id: id as u16,
-            stat: Some(stat),
+            stat,
             value,
         });
     }
@@ -711,6 +711,21 @@ fn parse_character_stats(raw: &[u8], layout: CharacterHeaderLayout) -> Character
         marker_offset: Some(marker_offset),
         entries,
         terminator_found,
+    }
+}
+
+fn character_stat_save_width(id: u16) -> usize {
+    // Character attributes use ItemStatCost.txt CSvBits. Most item-derived stats
+    // have zero character-save width, but they can still appear as ids in the
+    // gf stream before hard character stats.
+    match id {
+        0..=4 => 10,
+        5 => 8,
+        6..=11 => 21,
+        12 => 7,
+        13 => 32,
+        14 | 15 => 25,
+        _ => 0,
     }
 }
 
@@ -776,6 +791,8 @@ struct LegacyExportSnapshot {
     map_id: u32,
     stats: Vec<(CharacterStat, u32)>,
     skills: [u8; 30],
+    quests: [[u16; quest::SAVE_QUEST_WORDS_PER_DIFFICULTY]; 3],
+    waypoints: [[bool; waypoint::WAYPOINT_COUNT]; 3],
 }
 
 impl LegacyExportSnapshot {
@@ -812,6 +829,12 @@ impl LegacyExportSnapshot {
         stats.sort_by_key(|(stat, _)| *stat as u16);
         validate_character_stats(&stats)?;
 
+        let mut quests = [[0u16; quest::SAVE_QUEST_WORDS_PER_DIFFICULTY]; 3];
+        if let Some(quest_log) = state.player_quest_log() {
+            quests[state.difficulty().index()] = quest::quest_words_from_player_log(quest_log);
+        }
+        let waypoints = *state.player_waypoints().as_difficulties();
+
         let status = CharacterStatus {
             hardcore: state.is_hardcore(),
             died: false,
@@ -828,6 +851,8 @@ impl LegacyExportSnapshot {
             map_id: state.map().map_id.unwrap_or_default(),
             stats,
             skills,
+            quests,
+            waypoints,
         })
     }
 }
@@ -888,7 +913,7 @@ fn legacy_character_stats_from_player(player: &Player) -> Vec<(CharacterStat, u3
 
 fn legacy_save_stat_value(stat: CharacterStat, value: u32) -> u32 {
     if is_legacy_resource_stat(stat) {
-        value.checked_mul(1 << 8).unwrap_or(u32::MAX)
+        value.saturating_mul(1 << 8)
     } else {
         value
     }
@@ -989,6 +1014,9 @@ fn build_legacy_fixed_pre_stats_block(snapshot: &LegacyExportSnapshot) -> Vec<u8
     write_empty_legacy_quests(&mut raw);
     write_empty_legacy_waypoints(&mut raw);
     write_empty_legacy_npc_dialogs(&mut raw);
+    quest::write_legacy_quest_words(&mut raw, &snapshot.quests);
+    quest::apply_progression_from_quests(&mut raw, &snapshot.quests);
+    waypoint::write_legacy_waypoints(&mut raw, &snapshot.waypoints);
 
     debug_assert_eq!(LEGACY_ASSIGNED_SKILLS_OFFSET + 64, LEGACY_LEFT_SKILL_OFFSET);
     debug_assert_eq!(LEGACY_LEFT_SKILL_OFFSET + 4, LEGACY_RIGHT_SKILL_OFFSET);
@@ -1006,15 +1034,17 @@ fn build_legacy_fixed_pre_stats_block(snapshot: &LegacyExportSnapshot) -> Vec<u8
 
 fn write_empty_legacy_quests(raw: &mut [u8]) {
     write_u32_le(raw, LEGACY_QUEST_UNKNOWN_OFFSET, 1);
-    raw[LEGACY_QUEST_HEADER_OFFSET..LEGACY_QUEST_HEADER_OFFSET + 4].copy_from_slice(b"Woo!");
+    raw[LEGACY_QUEST_HEADER_OFFSET..LEGACY_QUEST_HEADER_OFFSET + 4]
+        .copy_from_slice(&quest::SAVE_QUEST_SECTION_MARKER);
     raw[LEGACY_QUEST_MAGIC_OFFSET..LEGACY_QUEST_MAGIC_OFFSET + 6]
-        .copy_from_slice(&[6, 0, 0, 0, 0x2a, 0x01]);
+        .copy_from_slice(&quest::SAVE_QUEST_SECTION_HEADER_AFTER_MARKER);
 }
 
 fn write_empty_legacy_waypoints(raw: &mut [u8]) {
-    raw[LEGACY_WAYPOINT_HEADER_OFFSET..LEGACY_WAYPOINT_HEADER_OFFSET + 2].copy_from_slice(b"WS");
+    raw[LEGACY_WAYPOINT_HEADER_OFFSET..LEGACY_WAYPOINT_HEADER_OFFSET + 2]
+        .copy_from_slice(&waypoint::LEGACY_WAYPOINT_SECTION_MARKER);
     raw[LEGACY_WAYPOINT_MAGIC_OFFSET..LEGACY_WAYPOINT_MAGIC_OFFSET + 6]
-        .copy_from_slice(&[6, 0, 0, 0, 0x2a, 0x01]);
+        .copy_from_slice(&waypoint::LEGACY_WAYPOINT_SECTION_HEADER_AFTER_MARKER);
     for difficulty in 0..3 {
         let offset =
             LEGACY_WAYPOINT_DIFFICULTIES_OFFSET + difficulty * LEGACY_WAYPOINT_DIFFICULTY_LEN;
@@ -1272,12 +1302,12 @@ fn encode_legacy_item(item: &Item, socketed_children: u8) -> Option<Vec<u8>> {
             | crate::core::object::item::ItemCategory::Weapon
             | crate::core::object::item::ItemCategory::Weapon2
             | crate::core::object::item::ItemCategory::Shield
-    )
-        && let Some(durability) = packet.durability {
-            writer.write_bits(durability.max as u32, 8);
-            writer.write_bits(durability.current as u32, 8);
-            writer.write_bool(false);
-        }
+    ) && let Some(durability) = packet.durability
+    {
+        writer.write_bits(durability.max as u32, 8);
+        writer.write_bits(durability.current as u32, 8);
+        writer.write_bool(false);
+    }
 
     if packet.flags.is_socketed() {
         writer.write_bits(packet.sockets.unwrap_or_default() as u32, 4);
@@ -1677,25 +1707,25 @@ fn fixed_c_string(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::game_state::GameState;
     use crate::core::inventory::GridSize;
     use crate::core::object::item::{Item, ItemContainer, ItemDestination, ItemFlags};
     use crate::core::unit_stat::UnitStat;
     use crate::core::update::Update;
     use crate::core::version::{CharacterStatus, GameEdition, SaveVersion};
+    use crate::core::{game_state::GameState, quest, waypoint};
     use crate::{CharacterClass, ServerMessage, SkillDescription};
 
     use super::{
-        calculate_checksum, read_bits, CharacterExportError, CharacterExportOptions, CharacterFile,
+        CHECKSUM_OFFSET, CharacterExportError, CharacterExportOptions, CharacterFile,
         CharacterFileError, CharacterHeaderLayout, CharacterProgression, CharacterStat,
-        SaveSectionMarker, CHECKSUM_OFFSET, D2R_LEGACY_NAME_OFFSET, D2R_V105_CLASS_OFFSET,
-        D2R_V105_HEADER_LEN, D2R_V105_LEVEL_OFFSET, D2R_V105_MERC_ID_OFFSET,
-        D2R_V105_MERC_NAME_SEED_OFFSET, D2R_V105_MERC_STATUS_OFFSET, D2R_V105_MERC_XP_OFFSET,
-        D2R_V105_NAME_OFFSET, D2R_V105_PROGRESSION_OFFSET, D2R_V105_STATUS_OFFSET, D2S_MAGIC,
-        FILE_SIZE_OFFSET, LEGACY_CLASS_OFFSET, LEGACY_FULL_EXPORT_PRE_STATS_LEN,
-        LEGACY_LEVEL_OFFSET, LEGACY_NAME_OFFSET, LEGACY_NPC_HEADER_OFFSET,
-        LEGACY_QUEST_HEADER_OFFSET, LEGACY_STATUS_OFFSET, LEGACY_WAYPOINT_HEADER_OFFSET,
-        LEGACY_WAYPOINT_TRAILER_OFFSET, VERSION_OFFSET,
+        D2R_LEGACY_NAME_OFFSET, D2R_V105_CLASS_OFFSET, D2R_V105_HEADER_LEN, D2R_V105_LEVEL_OFFSET,
+        D2R_V105_MERC_ID_OFFSET, D2R_V105_MERC_NAME_SEED_OFFSET, D2R_V105_MERC_STATUS_OFFSET,
+        D2R_V105_MERC_XP_OFFSET, D2R_V105_NAME_OFFSET, D2R_V105_PROGRESSION_OFFSET,
+        D2R_V105_STATUS_OFFSET, D2S_MAGIC, FILE_SIZE_OFFSET, LEGACY_CLASS_OFFSET,
+        LEGACY_FULL_EXPORT_PRE_STATS_LEN, LEGACY_LEVEL_OFFSET, LEGACY_NAME_OFFSET,
+        LEGACY_NPC_HEADER_OFFSET, LEGACY_QUEST_HEADER_OFFSET, LEGACY_STATUS_OFFSET,
+        LEGACY_WAYPOINT_HEADER_OFFSET, LEGACY_WAYPOINT_TRAILER_OFFSET, SaveSectionMarker,
+        VERSION_OFFSET, calculate_checksum, read_bits,
     };
 
     #[test]
@@ -1839,6 +1869,35 @@ mod tests {
     }
 
     #[test]
+    fn parses_character_stats_after_zero_width_unknown_stats() {
+        let mut raw = build_v105_save("Stats", CharacterClass::Necromancer, 42);
+        let mut stats = Vec::new();
+        stats.extend_from_slice(b"gf");
+        let mut writer = TestBitWriter::default();
+        writer.write_bits(16, 9);
+        writer.write_bits(CharacterStat::Strength as u32, 9);
+        writer.write_bits(30, CharacterStat::Strength.bit_width() as usize);
+        writer.write_bits(16, 9);
+        writer.write_bits(CharacterStat::Strength as u32, 9);
+        writer.write_bits(70, CharacterStat::Strength.bit_width() as usize);
+        writer.write_bits(CharacterStat::Level as u32, 9);
+        writer.write_bits(42, CharacterStat::Level.bit_width() as usize);
+        writer.write_bits(0x1ff, 9);
+        stats.extend_from_slice(&writer.finish());
+        raw.extend_from_slice(&stats);
+        raw.extend_from_slice(b"if");
+        raw.extend_from_slice(&[0; 30]);
+        fix_test_header(&mut raw);
+
+        let file = CharacterFile::parse(raw).expect("valid stats file should parse");
+
+        assert!(file.stats().terminator_found);
+        assert!(file.stats().entries.iter().any(|entry| entry.id == 16));
+        assert_eq!(file.stat(CharacterStat::Strength), Some(70));
+        assert_eq!(file.stat(CharacterStat::Level), Some(42));
+    }
+
+    #[test]
     fn parses_v105_item_related_section_headers() {
         let mut raw = build_v105_save("Items", CharacterClass::Warlock, 80);
         let first_jm = raw.len();
@@ -1942,6 +2001,8 @@ mod tests {
         assert_eq!(file.stat(CharacterStat::Energy), Some(35));
         assert_eq!(file.stat(CharacterStat::Level), Some(42));
         assert_eq!(file.stat(CharacterStat::Experience), Some(123_456));
+        assert_eq!(file.stat(CharacterStat::Gold), Some(12_345));
+        assert_eq!(file.stat(CharacterStat::StashedGold), Some(54_321));
         assert_eq!(file.stat(CharacterStat::HitPoints), Some(2048));
         assert_eq!(file.stat(CharacterStat::MaxHitPoints), Some(2048));
         assert_eq!(file.stat(CharacterStat::Mana), Some(4096));
@@ -1962,6 +2023,21 @@ mod tests {
             b"WS"
         );
         assert_eq!(file.raw_bytes()[LEGACY_WAYPOINT_TRAILER_OFFSET], 0x01);
+        let quests = quest::parse_legacy_quest_words(file.raw_bytes()).expect("quests exported");
+        assert_eq!(
+            quests[2][quest::QuestLogEntry::DenOfEvil.index()],
+            quest::QUEST_CLOSED_COMPLETE
+        );
+        assert_eq!(
+            quests[2][quest::QuestLogEntry::PrisonOfIce.index()]
+                & quest::QUEST_PRISON_OF_ICE_SCROLL_CONSUMED,
+            quest::QUEST_PRISON_OF_ICE_SCROLL_CONSUMED
+        );
+        let waypoints =
+            waypoint::parse_legacy_waypoints(file.raw_bytes()).expect("waypoints exported");
+        assert!(!waypoints[0][0]);
+        assert!(waypoints[2][0]);
+        assert!(waypoints[2][38]);
         assert_eq!(
             &file.raw_bytes()[LEGACY_NPC_HEADER_OFFSET..LEGACY_NPC_HEADER_OFFSET + 2],
             b"w4"
@@ -2231,6 +2307,27 @@ mod tests {
         assert!(state.update(ServerMessage::SetAttributeU32 {
             attribute: UnitStat::Experience as u8,
             amount: 123_456,
+        }));
+        assert!(state.update(ServerMessage::SetAttributeU32 {
+            attribute: UnitStat::GoldOnCharacter as u8,
+            amount: 12_345,
+        }));
+        assert!(state.update(ServerMessage::SetAttributeU32 {
+            attribute: UnitStat::GoldInStash as u8,
+            amount: 54_321,
+        }));
+        let mut quest_bits = [0u8; 41];
+        quest_bits[quest::QuestLogEntry::DenOfEvil.index()] =
+            quest::QuestLogEntryState::COMPLETED_BIT
+                | quest::QuestLogEntryState::REQUIREMENT_COMPLETED_BIT;
+        quest_bits[quest::QuestLogEntry::PrisonOfIce.index()] =
+            quest::QuestLogEntryState::COMPLETED_BIT;
+        assert!(state.update(ServerMessage::PlayerQuestLogInfo { quest_bits }));
+        assert!(state.update(ServerMessage::WaypointMenu {
+            unit_id: 0x1000,
+            unknown: 0,
+            waypoint_bits: [0b0000_0001, 0, 0, 0, 0b0100_0000, 0, 0, 0],
+            unused: [0; 6],
         }));
         assert!(state.update(ServerMessage::LifeManaUpdate {
             bitfield: status_bitfield::<12>(&[

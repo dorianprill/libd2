@@ -1,7 +1,7 @@
 #[allow(dead_code)]
 use crate::core::entity::Entity;
 use crate::core::update::Update;
-use crate::{core::coordinate::Coordinate, ServerMessage};
+use crate::{ServerMessage, core::coordinate::Coordinate};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Npc {
