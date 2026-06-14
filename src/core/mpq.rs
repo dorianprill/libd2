@@ -817,8 +817,8 @@ fn ensure_decoded_size(path: &str, decoded: &[u8], expected: u32) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::{
-        decrypt_mpq_block, encryption_table, mpq_decryption_key, mpq_hash, MpqArchive,
-        MpqBlockEntry, MpqFileFlags, MpqFormatVersion, MpqHashEntry, MpqHashType, MpqHeader,
+        MpqArchive, MpqBlockEntry, MpqFileFlags, MpqFormatVersion, MpqHashEntry, MpqHashType,
+        MpqHeader, decrypt_mpq_block, encryption_table, mpq_decryption_key, mpq_hash,
     };
     use sha2::{Digest, Sha256};
 
@@ -942,7 +942,10 @@ mod tests {
 
         assert_eq!(data.len(), 61_650);
         assert_eq!(
-            Sha256::digest(&data).iter().map(|b| format!("{:02x}", b)).collect::<String>(),
+            Sha256::digest(&data)
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>(),
             "3867b6f6bc92c4c2895d9cec970e6e499c2d3a9e647cc43cae4449e695b1a2c8"
         );
     }
@@ -961,7 +964,10 @@ mod tests {
 
         assert_eq!(data.len(), 61_650);
         assert_eq!(
-            Sha256::digest(&data).iter().map(|b| format!("{:02x}", b)).collect::<String>(),
+            Sha256::digest(&data)
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>(),
             "3867b6f6bc92c4c2895d9cec970e6e499c2d3a9e647cc43cae4449e695b1a2c8"
         );
     }

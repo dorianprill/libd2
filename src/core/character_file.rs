@@ -10,7 +10,7 @@ use crate::core::game_state::GameState;
 use crate::core::inventory::InventoryProfile;
 use crate::core::object::item::{Item, ItemContainer, ItemDestination, ItemOwner, ItemQuality};
 use crate::core::unit_stat::UnitStat;
-use crate::core::version::{detect_edition, CharacterStatus, GameEdition, SaveVersion};
+use crate::core::version::{CharacterStatus, GameEdition, SaveVersion, detect_edition};
 
 const D2S_MAGIC: u32 = 0xaa55_aa55;
 const VERSION_OFFSET: usize = 0x04;
@@ -158,6 +158,7 @@ impl CharacterStats {
     pub fn get(&self, stat: CharacterStat) -> Option<u32> {
         self.entries
             .iter()
+            .rev()
             .find(|entry| entry.stat == Some(stat))
             .map(|entry| entry.value)
     }
@@ -289,8 +290,7 @@ pub struct CharacterFile {
 /// captured in D2GS `0x94 PlayerSkillsInfo`. Tests and recovery tools can still
 /// supply an explicit table when they need to preserve fixture bytes or when a
 /// capture did not include the skill-list packet.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CharacterExportOptions {
     skills: Option<[u8; 30]>,
 }
@@ -316,7 +316,6 @@ impl CharacterExportOptions {
         self.skills.as_ref()
     }
 }
-
 
 impl CharacterFile {
     pub fn parse(bytes: impl Into<Vec<u8>>) -> Result<Self, CharacterFileError> {
@@ -688,10 +687,10 @@ fn parse_character_stats(raw: &[u8], layout: CharacterHeaderLayout) -> Character
             break;
         }
 
-        let Some(stat) = CharacterStat::from_id(id as u16) else {
-            break;
-        };
-        let width = stat.bit_width() as usize;
+        let stat = CharacterStat::from_id(id as u16);
+        let width = stat
+            .map(|stat| stat.bit_width() as usize)
+            .unwrap_or_else(|| character_stat_save_width(id as u16));
         if bit_offset + width > total_bits {
             break;
         }
@@ -702,7 +701,7 @@ fn parse_character_stats(raw: &[u8], layout: CharacterHeaderLayout) -> Character
         bit_offset += width;
         entries.push(CharacterStatEntry {
             id: id as u16,
-            stat: Some(stat),
+            stat,
             value,
         });
     }
@@ -711,6 +710,21 @@ fn parse_character_stats(raw: &[u8], layout: CharacterHeaderLayout) -> Character
         marker_offset: Some(marker_offset),
         entries,
         terminator_found,
+    }
+}
+
+fn character_stat_save_width(id: u16) -> usize {
+    // Character attributes use ItemStatCost.txt CSvBits. Most item-derived stats
+    // have zero character-save width, but they can still appear as ids in the
+    // gf stream before hard character stats.
+    match id {
+        0..=4 => 10,
+        5 => 8,
+        6..=11 => 21,
+        12 => 7,
+        13 => 32,
+        14 | 15 => 25,
+        _ => 0,
     }
 }
 
@@ -888,7 +902,7 @@ fn legacy_character_stats_from_player(player: &Player) -> Vec<(CharacterStat, u3
 
 fn legacy_save_stat_value(stat: CharacterStat, value: u32) -> u32 {
     if is_legacy_resource_stat(stat) {
-        value.checked_mul(1 << 8).unwrap_or(u32::MAX)
+        value.saturating_mul(1 << 8)
     } else {
         value
     }
@@ -1272,12 +1286,12 @@ fn encode_legacy_item(item: &Item, socketed_children: u8) -> Option<Vec<u8>> {
             | crate::core::object::item::ItemCategory::Weapon
             | crate::core::object::item::ItemCategory::Weapon2
             | crate::core::object::item::ItemCategory::Shield
-    )
-        && let Some(durability) = packet.durability {
-            writer.write_bits(durability.max as u32, 8);
-            writer.write_bits(durability.current as u32, 8);
-            writer.write_bool(false);
-        }
+    ) && let Some(durability) = packet.durability
+    {
+        writer.write_bits(durability.max as u32, 8);
+        writer.write_bits(durability.current as u32, 8);
+        writer.write_bool(false);
+    }
 
     if packet.flags.is_socketed() {
         writer.write_bits(packet.sockets.unwrap_or_default() as u32, 4);
@@ -1686,16 +1700,16 @@ mod tests {
     use crate::{CharacterClass, ServerMessage, SkillDescription};
 
     use super::{
-        calculate_checksum, read_bits, CharacterExportError, CharacterExportOptions, CharacterFile,
+        CHECKSUM_OFFSET, CharacterExportError, CharacterExportOptions, CharacterFile,
         CharacterFileError, CharacterHeaderLayout, CharacterProgression, CharacterStat,
-        SaveSectionMarker, CHECKSUM_OFFSET, D2R_LEGACY_NAME_OFFSET, D2R_V105_CLASS_OFFSET,
-        D2R_V105_HEADER_LEN, D2R_V105_LEVEL_OFFSET, D2R_V105_MERC_ID_OFFSET,
-        D2R_V105_MERC_NAME_SEED_OFFSET, D2R_V105_MERC_STATUS_OFFSET, D2R_V105_MERC_XP_OFFSET,
-        D2R_V105_NAME_OFFSET, D2R_V105_PROGRESSION_OFFSET, D2R_V105_STATUS_OFFSET, D2S_MAGIC,
-        FILE_SIZE_OFFSET, LEGACY_CLASS_OFFSET, LEGACY_FULL_EXPORT_PRE_STATS_LEN,
-        LEGACY_LEVEL_OFFSET, LEGACY_NAME_OFFSET, LEGACY_NPC_HEADER_OFFSET,
-        LEGACY_QUEST_HEADER_OFFSET, LEGACY_STATUS_OFFSET, LEGACY_WAYPOINT_HEADER_OFFSET,
-        LEGACY_WAYPOINT_TRAILER_OFFSET, VERSION_OFFSET,
+        D2R_LEGACY_NAME_OFFSET, D2R_V105_CLASS_OFFSET, D2R_V105_HEADER_LEN, D2R_V105_LEVEL_OFFSET,
+        D2R_V105_MERC_ID_OFFSET, D2R_V105_MERC_NAME_SEED_OFFSET, D2R_V105_MERC_STATUS_OFFSET,
+        D2R_V105_MERC_XP_OFFSET, D2R_V105_NAME_OFFSET, D2R_V105_PROGRESSION_OFFSET,
+        D2R_V105_STATUS_OFFSET, D2S_MAGIC, FILE_SIZE_OFFSET, LEGACY_CLASS_OFFSET,
+        LEGACY_FULL_EXPORT_PRE_STATS_LEN, LEGACY_LEVEL_OFFSET, LEGACY_NAME_OFFSET,
+        LEGACY_NPC_HEADER_OFFSET, LEGACY_QUEST_HEADER_OFFSET, LEGACY_STATUS_OFFSET,
+        LEGACY_WAYPOINT_HEADER_OFFSET, LEGACY_WAYPOINT_TRAILER_OFFSET, SaveSectionMarker,
+        VERSION_OFFSET, calculate_checksum, read_bits,
     };
 
     #[test]
@@ -1836,6 +1850,35 @@ mod tests {
         assert_eq!(file.stat(CharacterStat::Experience), Some(1_312_287));
         assert_eq!(skills.level_at_slot(0), Some(1));
         assert_eq!(skills.level_at_slot(12), Some(20));
+    }
+
+    #[test]
+    fn parses_character_stats_after_zero_width_unknown_stats() {
+        let mut raw = build_v105_save("Stats", CharacterClass::Necromancer, 42);
+        let mut stats = Vec::new();
+        stats.extend_from_slice(b"gf");
+        let mut writer = TestBitWriter::default();
+        writer.write_bits(16, 9);
+        writer.write_bits(CharacterStat::Strength as u32, 9);
+        writer.write_bits(30, CharacterStat::Strength.bit_width() as usize);
+        writer.write_bits(16, 9);
+        writer.write_bits(CharacterStat::Strength as u32, 9);
+        writer.write_bits(70, CharacterStat::Strength.bit_width() as usize);
+        writer.write_bits(CharacterStat::Level as u32, 9);
+        writer.write_bits(42, CharacterStat::Level.bit_width() as usize);
+        writer.write_bits(0x1ff, 9);
+        stats.extend_from_slice(&writer.finish());
+        raw.extend_from_slice(&stats);
+        raw.extend_from_slice(b"if");
+        raw.extend_from_slice(&[0; 30]);
+        fix_test_header(&mut raw);
+
+        let file = CharacterFile::parse(raw).expect("valid stats file should parse");
+
+        assert!(file.stats().terminator_found);
+        assert!(file.stats().entries.iter().any(|entry| entry.id == 16));
+        assert_eq!(file.stat(CharacterStat::Strength), Some(70));
+        assert_eq!(file.stat(CharacterStat::Level), Some(42));
     }
 
     #[test]

@@ -412,10 +412,10 @@ impl GameState {
             .pending_player_stats
             .remove(&unit_id)
             .unwrap_or_default();
-        if unit_id != canonical_id {
-            if let Some(canonical_pending) = self.pending_player_stats.remove(&canonical_id) {
-                pending.extend(canonical_pending);
-            }
+        if unit_id != canonical_id
+            && let Some(canonical_pending) = self.pending_player_stats.remove(&canonical_id)
+        {
+            pending.extend(canonical_pending);
         }
         if !pending.is_empty() {
             if let Some(player) = self.players.get_mut(&canonical_id) {
@@ -495,10 +495,7 @@ impl GameState {
                     player.set_remote_party_life(life);
                     player.set_remote_party_area_id(unit_area);
                 } else {
-                    let pending = self
-                        .pending_remote_party_info
-                        .entry(unit_id)
-                        .or_insert_with(RemotePartyInfo::default);
+                    let pending = self.pending_remote_party_info.entry(unit_id).or_default();
                     pending.set_life(life);
                     pending.set_area_id(unit_area);
                 }
@@ -1776,7 +1773,7 @@ fn ensure_resource_maxima_cover_vitals(player: &mut Player) {
         let Some(current) = current_resource_for_max_stat(player.vitals(), stat_id) else {
             continue;
         };
-        if player.stat(stat_id).map_or(true, |max| max < current) {
+        if player.stat(stat_id).is_none_or(|max| max < current) {
             player.set_stat(stat_id, current);
         }
     }

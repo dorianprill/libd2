@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use crate::ServerMessage;
 use crate::core::character_class::CharacterClass;
 use crate::core::coordinate::Coordinate;
 use crate::core::entity::Entity;
 use crate::core::update::Update;
-use crate::ServerMessage;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MercenaryClass {

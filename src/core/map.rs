@@ -169,28 +169,32 @@ impl MapGenerationRequest {
         response: MapgenResponse,
     ) -> Result<GeneratedMap, MapGenerationError> {
         if let Some(seed) = response.seed
-            && seed != self.generator_seed() as u64 {
-                return Err(MapGenerationError::ResponseSeedMismatch {
-                    expected: self.generator_seed(),
-                    actual: seed,
-                });
-            }
+            && seed != self.generator_seed() as u64
+        {
+            return Err(MapGenerationError::ResponseSeedMismatch {
+                expected: self.generator_seed(),
+                actual: seed,
+            });
+        }
 
         if let Some(difficulty) = response.difficulty
-            && difficulty != self.generator_difficulty() as u64 {
-                return Err(MapGenerationError::ResponseDifficultyMismatch {
-                    expected: self.generator_difficulty(),
-                    actual: difficulty,
-                });
-            }
+            && difficulty != self.generator_difficulty() as u64
+        {
+            return Err(MapGenerationError::ResponseDifficultyMismatch {
+                expected: self.generator_difficulty(),
+                actual: difficulty,
+            });
+        }
 
         if let Some(act) = response.act
-            && act != -1 && act != self.generator_act() as i64 {
-                return Err(MapGenerationError::ResponseActMismatch {
-                    expected: self.generator_act(),
-                    actual: act,
-                });
-            }
+            && act != -1
+            && act != self.generator_act() as i64
+        {
+            return Err(MapGenerationError::ResponseActMismatch {
+                expected: self.generator_act(),
+                actual: act,
+            });
+        }
 
         let requested_level = self.generator_level() as u64;
         let Some(level) = response
@@ -697,9 +701,9 @@ mod tests {
     use crate::core::game_state::Difficulty;
 
     use super::{
-        act_from_level_id, expand_rle_row, is_good_exit, is_valid_map_seed, rle_row_is_blocked,
         CollisionGrid, GeneratedMap, GeneratedMapJsonError, MapGenerationError,
-        MapGenerationRequest, MapGenerationRequestError, MapObjectKind, MapSeed,
+        MapGenerationRequest, MapGenerationRequestError, MapObjectKind, MapSeed, act_from_level_id,
+        expand_rle_row, is_good_exit, is_valid_map_seed, rle_row_is_blocked,
     };
 
     #[test]

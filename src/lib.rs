@@ -1,7 +1,7 @@
 pub mod client;
 pub mod core;
 
-pub use self::client::client::Client;
+pub use self::client::Client;
 
 pub use crate::core::act::Act;
 pub use crate::core::area::Area;

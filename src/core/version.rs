@@ -105,7 +105,7 @@ pub fn detect_edition(version: SaveVersion, status: CharacterStatus) -> GameEdit
 
 #[cfg(test)]
 mod tests {
-    use super::{detect_edition, CharacterStatus, GameEdition, SaveVersion};
+    use super::{CharacterStatus, GameEdition, SaveVersion, detect_edition};
 
     #[test]
     fn character_status_round_trips_known_bits() {
