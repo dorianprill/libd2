@@ -164,10 +164,15 @@ pub const WAYPOINT_ACTS: [WaypointAct; 5] = [
 ];
 
 /// Parses legacy `.d2s` waypoint flags from a raw save buffer.
-pub fn parse_legacy_waypoints(raw: &[u8]) -> Option<[[bool; WAYPOINT_COUNT]; 3]> {
-    let marker = raw
+pub fn parse_legacy_waypoints(
+    raw: &[u8],
+    start_offset: usize,
+) -> Option<[[bool; WAYPOINT_COUNT]; 3]> {
+    let search_space = raw.get(start_offset..)?;
+    let marker = search_space
         .windows(LEGACY_WAYPOINT_SECTION_MARKER.len())
-        .position(|window| window == LEGACY_WAYPOINT_SECTION_MARKER)?;
+        .position(|window| window == LEGACY_WAYPOINT_SECTION_MARKER)?
+        + start_offset;
     let mut offset = marker + LEGACY_WAYPOINT_SECTION_HEADER_BYTES;
     let mut waypoints = [[false; WAYPOINT_COUNT]; 3];
 
@@ -187,13 +192,21 @@ pub fn parse_legacy_waypoints(raw: &[u8]) -> Option<[[bool; WAYPOINT_COUNT]; 3]>
 }
 
 /// Writes legacy `.d2s` waypoint flags into a raw save buffer when the section exists.
-pub fn write_legacy_waypoints(raw: &mut [u8], waypoints: &[[bool; WAYPOINT_COUNT]; 3]) -> bool {
-    let Some(marker) = raw
+pub fn write_legacy_waypoints(
+    raw: &mut [u8],
+    start_offset: usize,
+    waypoints: &[[bool; WAYPOINT_COUNT]; 3],
+) -> bool {
+    let Some(search_space) = raw.get(start_offset..) else {
+        return false;
+    };
+    let Some(marker_rel) = search_space
         .windows(LEGACY_WAYPOINT_SECTION_MARKER.len())
         .position(|window| window == LEGACY_WAYPOINT_SECTION_MARKER)
     else {
         return false;
     };
+    let marker = marker_rel + start_offset;
 
     if marker + LEGACY_WAYPOINT_SECTION_HEADER_BYTES <= raw.len() {
         raw[marker + LEGACY_WAYPOINT_SECTION_MARKER.len()
@@ -266,9 +279,9 @@ mod tests {
         waypoints[1][17] = true;
         waypoints[2][38] = true;
 
-        assert!(write_legacy_waypoints(&mut raw, &waypoints));
+        assert!(write_legacy_waypoints(&mut raw, 0, &waypoints));
         assert_eq!(raw[LEGACY_WAYPOINT_TRAILER_OFFSET], LEGACY_WAYPOINT_TRAILER);
-        assert_eq!(parse_legacy_waypoints(&raw), Some(waypoints));
+        assert_eq!(parse_legacy_waypoints(&raw, 0), Some(waypoints));
     }
 
     #[test]

@@ -130,6 +130,15 @@ impl CharacterProgression {
             other => Self::Unknown(other),
         }
     }
+
+    pub fn to_v105_byte(self) -> u8 {
+        match self {
+            Self::Normal => 0x00,
+            Self::Nightmare => 0x05,
+            Self::Hell => 0x0f,
+            Self::Unknown(other) => other,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -385,6 +394,106 @@ impl CharacterFile {
         raw
     }
 
+    pub fn set_header_fields(
+        &mut self,
+        name: &str,
+        status: CharacterStatus,
+        class: CharacterClass,
+        level: u8,
+        progression: Option<CharacterProgression>,
+    ) -> Result<(), CharacterExportError> {
+        let layout = self.header.layout;
+        let bytes = name.as_bytes();
+        let len = bytes.len().min(15);
+        let name_offset = layout.name_offset();
+
+        self.raw[name_offset..name_offset + 16].fill(0);
+        self.raw[name_offset..name_offset + len].copy_from_slice(&bytes[..len]);
+
+        self.raw[layout.status_offset()] = status.to_byte();
+        self.raw[layout.class_offset()] = class as u8;
+        self.raw[layout.level_offset()] = level;
+
+        if let (Some(prog), Some(prog_offset)) = (progression, layout.progression_offset()) {
+            self.raw[prog_offset] = prog.to_v105_byte();
+        }
+
+        self.header.name = name.to_string();
+        self.header.status = status;
+        self.header.class = Some(class);
+        self.header.class_id = class as u8;
+        self.header.level = level;
+        self.header.progression = progression;
+
+        fix_header(&mut self.raw);
+        Ok(())
+    }
+
+    pub fn replace_stats_and_skills(
+        &mut self,
+        stats_section: &[u8],
+        skills_section: &[u8],
+    ) -> Result<(), CharacterExportError> {
+        let start = self.header.layout.section_search_start();
+
+        let stats_start = find_section_marker(&self.raw, SaveSectionMarker::Stats, start).ok_or(
+            CharacterExportError::MissingSection {
+                marker: SaveSectionMarker::Stats,
+            },
+        )?;
+
+        let skills_start =
+            find_section_marker(&self.raw, SaveSectionMarker::Skills, stats_start + 2).ok_or(
+                CharacterExportError::MissingSection {
+                    marker: SaveSectionMarker::Skills,
+                },
+            )?;
+
+        if self.raw.len() < skills_start + 32 {
+            return Err(CharacterExportError::MissingSection {
+                marker: SaveSectionMarker::Skills,
+            });
+        }
+
+        // Splice AFTER the 'gf' marker (which is 2 bytes)
+        self.raw
+            .splice(stats_start + 2..skills_start, stats_section.iter().copied());
+
+        // Find the new skills start (since we just modified the length of the vector)
+        let new_skills_start =
+            find_section_marker(&self.raw, SaveSectionMarker::Skills, stats_start + 2).unwrap();
+
+        // Splice AFTER the 'if' marker (which is 2 bytes)
+        self.raw.splice(
+            new_skills_start + 2..new_skills_start + 32,
+            skills_section.iter().copied(),
+        );
+
+        fix_header(&mut self.raw);
+        Ok(())
+    }
+
+    pub fn replace_quests(
+        &mut self,
+        quests: &[[u16; quest::SAVE_QUEST_WORDS_PER_DIFFICULTY]; 3],
+    ) -> Result<(), CharacterExportError> {
+        let start = self.header.layout.section_search_start();
+        quest::write_legacy_quest_words(&mut self.raw, start, quests);
+        quest::apply_progression_from_quests(&mut self.raw, start, quests);
+        fix_header(&mut self.raw);
+        Ok(())
+    }
+
+    pub fn replace_waypoints(
+        &mut self,
+        waypoints: &[[bool; waypoint::WAYPOINT_COUNT]; 3],
+    ) -> Result<(), CharacterExportError> {
+        let start = self.header.layout.section_search_start();
+        waypoint::write_legacy_waypoints(&mut self.raw, start, waypoints);
+        fix_header(&mut self.raw);
+        Ok(())
+    }
+
     /// Builds a standalone legacy Classic/LoD `.d2s` file from the local player
     /// in a reconstructed [`GameState`].
     ///
@@ -420,23 +529,17 @@ impl CharacterFile {
     /// meant to start from a real Classic/LoD character file, because D2GS does
     /// not expose every save-only section needed to synthesize a complete save
     /// from scratch.
-    pub fn overlay_legacy_game_state(
+    pub fn overlay_game_state(
         &self,
         state: &GameState,
         options: CharacterExportOptions,
     ) -> Result<Self, CharacterExportError> {
-        if self.header.layout != CharacterHeaderLayout::Legacy {
-            return Err(CharacterExportError::UnsupportedTemplateLayout {
-                layout: self.header.layout,
-            });
-        }
-
         let snapshot = LegacyExportSnapshot::from_game_state(state, options)?;
         let stats_section = encode_character_stats_section(&snapshot.stats)?;
         let skills_section = encode_character_skills_section(snapshot.skills);
 
         let mut raw = self.raw.clone();
-        write_legacy_header_snapshot(&mut raw, &snapshot);
+        write_legacy_header_snapshot(&mut raw, &snapshot); // For now keep using legacy writer
         replace_legacy_export_sections(&mut raw, &stats_section, &skills_section)?;
         fix_header(&mut raw);
 
@@ -1014,9 +1117,9 @@ fn build_legacy_fixed_pre_stats_block(snapshot: &LegacyExportSnapshot) -> Vec<u8
     write_empty_legacy_quests(&mut raw);
     write_empty_legacy_waypoints(&mut raw);
     write_empty_legacy_npc_dialogs(&mut raw);
-    quest::write_legacy_quest_words(&mut raw, &snapshot.quests);
-    quest::apply_progression_from_quests(&mut raw, &snapshot.quests);
-    waypoint::write_legacy_waypoints(&mut raw, &snapshot.waypoints);
+    quest::write_legacy_quest_words(&mut raw, 0, &snapshot.quests);
+    quest::apply_progression_from_quests(&mut raw, 0, &snapshot.quests);
+    waypoint::write_legacy_waypoints(&mut raw, 0, &snapshot.waypoints);
 
     debug_assert_eq!(LEGACY_ASSIGNED_SKILLS_OFFSET + 64, LEGACY_LEFT_SKILL_OFFSET);
     debug_assert_eq!(LEGACY_LEFT_SKILL_OFFSET + 4, LEGACY_RIGHT_SKILL_OFFSET);
@@ -2023,7 +2126,7 @@ mod tests {
             b"WS"
         );
         assert_eq!(file.raw_bytes()[LEGACY_WAYPOINT_TRAILER_OFFSET], 0x01);
-        let quests = quest::parse_legacy_quest_words(file.raw_bytes()).expect("quests exported");
+        let quests = quest::parse_legacy_quest_words(file.raw_bytes(), 0).expect("quests exported");
         assert_eq!(
             quests[2][quest::QuestLogEntry::DenOfEvil.index()],
             quest::QUEST_CLOSED_COMPLETE
@@ -2034,7 +2137,7 @@ mod tests {
             quest::QUEST_PRISON_OF_ICE_SCROLL_CONSUMED
         );
         let waypoints =
-            waypoint::parse_legacy_waypoints(file.raw_bytes()).expect("waypoints exported");
+            waypoint::parse_legacy_waypoints(file.raw_bytes(), 0).expect("waypoints exported");
         assert!(!waypoints[0][0]);
         assert!(waypoints[2][0]);
         assert!(waypoints[2][38]);
@@ -2081,7 +2184,7 @@ mod tests {
         let mut skills = [0; 30];
         skills[7] = 9;
         let exported = template
-            .overlay_legacy_game_state(&state, CharacterExportOptions::new(skills))
+            .overlay_game_state(&state, CharacterExportOptions::new(skills))
             .expect("template overlay should export");
 
         assert_eq!(exported.header().name, "Exported");

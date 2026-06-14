@@ -144,14 +144,23 @@ const ASSASSIN_SKILL_CATEGORIES: [SkillCategory; 3] = [
     },
 ];
 
-const WARLOCK_SKILLS: [usize; 30] = [
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-    26, 27, 28, 29,
+const WARLOCK_CHAOS: [usize; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+const WARLOCK_ELDRITCH: [usize; 10] = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
+const WARLOCK_DEMON: [usize; 10] = [20, 21, 22, 23, 24, 25, 26, 27, 28, 29];
+const WARLOCK_SKILL_CATEGORIES: [SkillCategory; 3] = [
+    SkillCategory {
+        name: "Chaos Tree",
+        slots: &WARLOCK_CHAOS,
+    },
+    SkillCategory {
+        name: "Eldritch Tree",
+        slots: &WARLOCK_ELDRITCH,
+    },
+    SkillCategory {
+        name: "Demon Tree",
+        slots: &WARLOCK_DEMON,
+    },
 ];
-const WARLOCK_SKILL_CATEGORIES: [SkillCategory; 1] = [SkillCategory {
-    name: "Warlock Skills",
-    slots: &WARLOCK_SKILLS,
-}];
 
 /// Returns the localized English skill name for a class-local save slot.
 pub fn skill_name(class: CharacterClass, slot: usize) -> &'static str {
@@ -387,7 +396,39 @@ pub fn skill_name(class: CharacterClass, slot: usize) -> &'static str {
             29 => "Phoenix Strike",
             _ => "Unknown",
         },
-        CharacterClass::Warlock => "Warlock Skill",
+        CharacterClass::Warlock => match slot {
+            0 => "Ring of Fire",
+            1 => "Flame Wave",
+            2 => "Sigil Lethargy",
+            3 => "Sigil Rancor",
+            4 => "Sigil Death",
+            5 => "Apocalypse",
+            6 => "Miasma Bolt",
+            7 => "Miasma Chains",
+            8 => "Enhanced Entropy",
+            9 => "Abyss",
+            10 => "Levitation Mastery",
+            11 => "Echoing Strike",
+            12 => "Blade Warp",
+            13 => "Cleave",
+            14 => "Psychic Ward",
+            15 => "Eldritch Blast",
+            16 => "Mirrored Blades",
+            17 => "Hex Bane",
+            18 => "Hex Purge",
+            19 => "Hex Siphon",
+            20 => "Summon Goatman",
+            21 => "Demonic Mastery",
+            22 => "Blood Oath",
+            23 => "Consume",
+            24 => "Death Mark",
+            25 => "Blood Boil",
+            26 => "Engorge",
+            27 => "Summon Tainted",
+            28 => "Summon Defiler",
+            29 => "Bind Demon",
+            _ => "Unknown",
+        },
     }
 }
 
@@ -1290,9 +1331,131 @@ pub fn skill_requirement(class: CharacterClass, slot: usize) -> SkillRequirement
                 prereqs: &[],
             },
         },
-        CharacterClass::Warlock => SkillRequirement {
-            level: 1,
-            prereqs: &[],
+        CharacterClass::Warlock => match slot {
+            0 => SkillRequirement {
+                level: 1,
+                prereqs: &[],
+            },
+            1 => SkillRequirement {
+                level: 6,
+                prereqs: &[0],
+            },
+            2 => SkillRequirement {
+                level: 1,
+                prereqs: &[],
+            },
+            3 => SkillRequirement {
+                level: 12,
+                prereqs: &[2],
+            },
+            4 => SkillRequirement {
+                level: 24,
+                prereqs: &[3],
+            },
+            5 => SkillRequirement {
+                level: 30,
+                prereqs: &[1, 4],
+            },
+            6 => SkillRequirement {
+                level: 1,
+                prereqs: &[],
+            },
+            7 => SkillRequirement {
+                level: 6,
+                prereqs: &[6],
+            },
+            8 => SkillRequirement {
+                level: 18,
+                prereqs: &[7],
+            },
+            9 => SkillRequirement {
+                level: 30,
+                prereqs: &[8],
+            },
+            10 => SkillRequirement {
+                level: 1,
+                prereqs: &[],
+            },
+            11 => SkillRequirement {
+                level: 6,
+                prereqs: &[10],
+            },
+            12 => SkillRequirement {
+                level: 12,
+                prereqs: &[11],
+            },
+            13 => SkillRequirement {
+                level: 1,
+                prereqs: &[10],
+            },
+            14 => SkillRequirement {
+                level: 12,
+                prereqs: &[13],
+            },
+            15 => SkillRequirement {
+                level: 24,
+                prereqs: &[14],
+            },
+            16 => SkillRequirement {
+                level: 30,
+                prereqs: &[15, 12],
+            },
+            17 => SkillRequirement {
+                level: 1,
+                prereqs: &[],
+            },
+            18 => SkillRequirement {
+                level: 12,
+                prereqs: &[17],
+            },
+            19 => SkillRequirement {
+                level: 24,
+                prereqs: &[18],
+            },
+            20 => SkillRequirement {
+                level: 1,
+                prereqs: &[],
+            },
+            21 => SkillRequirement {
+                level: 6,
+                prereqs: &[20],
+            },
+            22 => SkillRequirement {
+                level: 12,
+                prereqs: &[21],
+            },
+            23 => SkillRequirement {
+                level: 18,
+                prereqs: &[22],
+            },
+            24 => SkillRequirement {
+                level: 1,
+                prereqs: &[20],
+            },
+            25 => SkillRequirement {
+                level: 12,
+                prereqs: &[24],
+            },
+            26 => SkillRequirement {
+                level: 24,
+                prereqs: &[25],
+            },
+            27 => SkillRequirement {
+                level: 6,
+                prereqs: &[20],
+            },
+            28 => SkillRequirement {
+                level: 18,
+                prereqs: &[27],
+            },
+            29 => SkillRequirement {
+                level: 30,
+                prereqs: &[26, 28],
+            },
+            _ => SkillRequirement {
+                level: 1,
+                prereqs: &[],
+            },
         },
     }
 }
@@ -1542,5 +1705,32 @@ mod tests {
 
         assert_eq!(skills[1], 1);
         assert_eq!(remaining, 93);
+    }
+
+    #[test]
+    fn warlock_bind_demon_adds_recursive_prerequisites() {
+        let mut skills = [0; 30];
+        let mut remaining = 98;
+
+        assert!(increase_skill(
+            CharacterClass::Warlock,
+            99,
+            &mut skills,
+            &mut remaining,
+            29
+        ));
+
+        // Bind Demon (29) requires Engorge (26) and Summon Defiler (28)
+        // Engorge (26) -> Blood Boil (25) -> Death Mark (24) -> Summon Goatman (20)
+        // Summon Defiler (28) -> Summon Tainted (27) -> Summon Goatman (20)
+        for slot in [20, 24, 25, 26, 27, 28, 29] {
+            assert_eq!(
+                skills[slot],
+                1,
+                "{} should receive one hard point",
+                skill_name(CharacterClass::Warlock, slot)
+            );
+        }
+        assert_eq!(remaining, 91);
     }
 }

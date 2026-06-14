@@ -510,7 +510,7 @@ fn legacy_skill_offset(class: CharacterClass) -> Option<u16> {
         CharacterClass::Barbarian => Some(126),
         CharacterClass::Druid => Some(221),
         CharacterClass::Assassin => Some(251),
-        CharacterClass::Warlock => None,
+        CharacterClass::Warlock => Some(373),
     }
 }
 
