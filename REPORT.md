@@ -1,6 +1,6 @@
 # libd2 Report
 
-Last updated: 2026-06-11
+Last updated: 2026-06-14
 
 ## Current Status
 
@@ -536,28 +536,41 @@ MPQ bytes
   window, but a missing captured segment no longer stalls later payloads until
   the byte/segment buffer limit is reached.
 
+## Savegame Core Data
+
+- Added reusable hardcoded Diablo II character progression data for tools that
+  need to work without a local game install: level 1-99 XP breakpoints, class
+  base stats, class resource growth values from `CharStats.txt` in quarter-unit
+  form, level point gains, and legacy inventory/stash gold caps.
+- Added reusable class skill metadata and rules: class-local save slots, skill
+  names, in-game skill tab groupings, level gates, recursive prerequisite
+  checks, and allocation/deallocation helpers that preserve prerequisite
+  validity.
+- Extended quest support beyond packet-derived quest logs with legacy `.d2s`
+  16-bit quest-word semantics: visible quest indices and act groupings, quest
+  names, completion/reward bits, Malah resistance scroll tracking, hidden
+  act/difficulty progression words, reward point totals, and header progression
+  derivation.
+- Added waypoint metadata for legacy save-bit order: waypoint names, act
+  ranges, save-section byte dimensions, and parse/write helpers for the legacy
+  waypoint section. Quest support similarly exposes parse/write helpers for the
+  legacy `Woo!` quest section.
+- Wired live character export through the shared quest/waypoint helpers:
+  `0x63 WaypointMenu` now parses into current-difficulty waypoint state, the
+  local `0x52 PlayerQuestLog` can be converted into legacy quest words, and
+  synthetic `.d2s` exports write known quests, known waypoints, inventory gold,
+  and stash gold through parsed game-state values.
+
 ## Verification
 
 ```text
 cargo test
 ```
 
-Result: passed. 143 tests.
+Result: passed. 171 tests.
 
 ```text
-cargo fmt --check
-```
-
-Result: passed.
-
-```text
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
-```
-
-Result: passed.
-
-```text
-git diff --check
+cargo clippy --all-targets -- -D warnings
 ```
 
 Result: passed.

@@ -1478,6 +1478,15 @@ impl ServerMessage {
                     player_id: cursor.u32_le(),
                 })
             }
+            0x63 => {
+                let mut cursor = PacketCursor::new(input, 21)?;
+                Ok(Self::WaypointMenu {
+                    unit_id: cursor.u32_le(),
+                    unknown: cursor.u16_le(),
+                    waypoint_bits: cursor.array(),
+                    unused: cursor.array(),
+                })
+            }
             0x67 => {
                 let mut cursor = PacketCursor::new(input, 16)?;
                 Ok(Self::NpcMove {
@@ -2647,6 +2656,20 @@ mod tests {
             ServerMessage::parse(&quest_log).expect("player quest log should parse"),
             ServerMessage::PlayerQuestLogInfo {
                 quest_bits: quest_log_bits,
+            }
+        );
+
+        let waypoint_menu = [
+            0x63, 0x44, 0x33, 0x22, 0x11, 0x66, 0x55, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40,
+            0x80, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+        ];
+        assert_eq!(
+            ServerMessage::parse(&waypoint_menu).expect("waypoint menu should parse"),
+            ServerMessage::WaypointMenu {
+                unit_id: 0x1122_3344,
+                unknown: 0x5566,
+                waypoint_bits: [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80],
+                unused: [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff],
             }
         );
     }

@@ -11,6 +11,7 @@ use crate::core::inventory::InventoryProfile;
 use crate::core::object::item::{Item, ItemContainer, ItemDestination, ItemOwner, ItemQuality};
 use crate::core::unit_stat::UnitStat;
 use crate::core::version::{CharacterStatus, GameEdition, SaveVersion, detect_edition};
+use crate::core::{quest, waypoint};
 
 const D2S_MAGIC: u32 = 0xaa55_aa55;
 const VERSION_OFFSET: usize = 0x04;
@@ -790,6 +791,8 @@ struct LegacyExportSnapshot {
     map_id: u32,
     stats: Vec<(CharacterStat, u32)>,
     skills: [u8; 30],
+    quests: [[u16; quest::SAVE_QUEST_WORDS_PER_DIFFICULTY]; 3],
+    waypoints: [[bool; waypoint::WAYPOINT_COUNT]; 3],
 }
 
 impl LegacyExportSnapshot {
@@ -826,6 +829,12 @@ impl LegacyExportSnapshot {
         stats.sort_by_key(|(stat, _)| *stat as u16);
         validate_character_stats(&stats)?;
 
+        let mut quests = [[0u16; quest::SAVE_QUEST_WORDS_PER_DIFFICULTY]; 3];
+        if let Some(quest_log) = state.player_quest_log() {
+            quests[state.difficulty().index()] = quest::quest_words_from_player_log(quest_log);
+        }
+        let waypoints = *state.player_waypoints().as_difficulties();
+
         let status = CharacterStatus {
             hardcore: state.is_hardcore(),
             died: false,
@@ -842,6 +851,8 @@ impl LegacyExportSnapshot {
             map_id: state.map().map_id.unwrap_or_default(),
             stats,
             skills,
+            quests,
+            waypoints,
         })
     }
 }
@@ -1003,6 +1014,9 @@ fn build_legacy_fixed_pre_stats_block(snapshot: &LegacyExportSnapshot) -> Vec<u8
     write_empty_legacy_quests(&mut raw);
     write_empty_legacy_waypoints(&mut raw);
     write_empty_legacy_npc_dialogs(&mut raw);
+    quest::write_legacy_quest_words(&mut raw, &snapshot.quests);
+    quest::apply_progression_from_quests(&mut raw, &snapshot.quests);
+    waypoint::write_legacy_waypoints(&mut raw, &snapshot.waypoints);
 
     debug_assert_eq!(LEGACY_ASSIGNED_SKILLS_OFFSET + 64, LEGACY_LEFT_SKILL_OFFSET);
     debug_assert_eq!(LEGACY_LEFT_SKILL_OFFSET + 4, LEGACY_RIGHT_SKILL_OFFSET);
@@ -1020,15 +1034,17 @@ fn build_legacy_fixed_pre_stats_block(snapshot: &LegacyExportSnapshot) -> Vec<u8
 
 fn write_empty_legacy_quests(raw: &mut [u8]) {
     write_u32_le(raw, LEGACY_QUEST_UNKNOWN_OFFSET, 1);
-    raw[LEGACY_QUEST_HEADER_OFFSET..LEGACY_QUEST_HEADER_OFFSET + 4].copy_from_slice(b"Woo!");
+    raw[LEGACY_QUEST_HEADER_OFFSET..LEGACY_QUEST_HEADER_OFFSET + 4]
+        .copy_from_slice(&quest::SAVE_QUEST_SECTION_MARKER);
     raw[LEGACY_QUEST_MAGIC_OFFSET..LEGACY_QUEST_MAGIC_OFFSET + 6]
-        .copy_from_slice(&[6, 0, 0, 0, 0x2a, 0x01]);
+        .copy_from_slice(&quest::SAVE_QUEST_SECTION_HEADER_AFTER_MARKER);
 }
 
 fn write_empty_legacy_waypoints(raw: &mut [u8]) {
-    raw[LEGACY_WAYPOINT_HEADER_OFFSET..LEGACY_WAYPOINT_HEADER_OFFSET + 2].copy_from_slice(b"WS");
+    raw[LEGACY_WAYPOINT_HEADER_OFFSET..LEGACY_WAYPOINT_HEADER_OFFSET + 2]
+        .copy_from_slice(&waypoint::LEGACY_WAYPOINT_SECTION_MARKER);
     raw[LEGACY_WAYPOINT_MAGIC_OFFSET..LEGACY_WAYPOINT_MAGIC_OFFSET + 6]
-        .copy_from_slice(&[6, 0, 0, 0, 0x2a, 0x01]);
+        .copy_from_slice(&waypoint::LEGACY_WAYPOINT_SECTION_HEADER_AFTER_MARKER);
     for difficulty in 0..3 {
         let offset =
             LEGACY_WAYPOINT_DIFFICULTIES_OFFSET + difficulty * LEGACY_WAYPOINT_DIFFICULTY_LEN;
@@ -1691,12 +1707,12 @@ fn fixed_c_string(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::game_state::GameState;
     use crate::core::inventory::GridSize;
     use crate::core::object::item::{Item, ItemContainer, ItemDestination, ItemFlags};
     use crate::core::unit_stat::UnitStat;
     use crate::core::update::Update;
     use crate::core::version::{CharacterStatus, GameEdition, SaveVersion};
+    use crate::core::{game_state::GameState, quest, waypoint};
     use crate::{CharacterClass, ServerMessage, SkillDescription};
 
     use super::{
@@ -1985,6 +2001,8 @@ mod tests {
         assert_eq!(file.stat(CharacterStat::Energy), Some(35));
         assert_eq!(file.stat(CharacterStat::Level), Some(42));
         assert_eq!(file.stat(CharacterStat::Experience), Some(123_456));
+        assert_eq!(file.stat(CharacterStat::Gold), Some(12_345));
+        assert_eq!(file.stat(CharacterStat::StashedGold), Some(54_321));
         assert_eq!(file.stat(CharacterStat::HitPoints), Some(2048));
         assert_eq!(file.stat(CharacterStat::MaxHitPoints), Some(2048));
         assert_eq!(file.stat(CharacterStat::Mana), Some(4096));
@@ -2005,6 +2023,21 @@ mod tests {
             b"WS"
         );
         assert_eq!(file.raw_bytes()[LEGACY_WAYPOINT_TRAILER_OFFSET], 0x01);
+        let quests = quest::parse_legacy_quest_words(file.raw_bytes()).expect("quests exported");
+        assert_eq!(
+            quests[2][quest::QuestLogEntry::DenOfEvil.index()],
+            quest::QUEST_CLOSED_COMPLETE
+        );
+        assert_eq!(
+            quests[2][quest::QuestLogEntry::PrisonOfIce.index()]
+                & quest::QUEST_PRISON_OF_ICE_SCROLL_CONSUMED,
+            quest::QUEST_PRISON_OF_ICE_SCROLL_CONSUMED
+        );
+        let waypoints =
+            waypoint::parse_legacy_waypoints(file.raw_bytes()).expect("waypoints exported");
+        assert!(!waypoints[0][0]);
+        assert!(waypoints[2][0]);
+        assert!(waypoints[2][38]);
         assert_eq!(
             &file.raw_bytes()[LEGACY_NPC_HEADER_OFFSET..LEGACY_NPC_HEADER_OFFSET + 2],
             b"w4"
@@ -2274,6 +2307,27 @@ mod tests {
         assert!(state.update(ServerMessage::SetAttributeU32 {
             attribute: UnitStat::Experience as u8,
             amount: 123_456,
+        }));
+        assert!(state.update(ServerMessage::SetAttributeU32 {
+            attribute: UnitStat::GoldOnCharacter as u8,
+            amount: 12_345,
+        }));
+        assert!(state.update(ServerMessage::SetAttributeU32 {
+            attribute: UnitStat::GoldInStash as u8,
+            amount: 54_321,
+        }));
+        let mut quest_bits = [0u8; 41];
+        quest_bits[quest::QuestLogEntry::DenOfEvil.index()] =
+            quest::QuestLogEntryState::COMPLETED_BIT
+                | quest::QuestLogEntryState::REQUIREMENT_COMPLETED_BIT;
+        quest_bits[quest::QuestLogEntry::PrisonOfIce.index()] =
+            quest::QuestLogEntryState::COMPLETED_BIT;
+        assert!(state.update(ServerMessage::PlayerQuestLogInfo { quest_bits }));
+        assert!(state.update(ServerMessage::WaypointMenu {
+            unit_id: 0x1000,
+            unknown: 0,
+            waypoint_bits: [0b0000_0001, 0, 0, 0, 0b0100_0000, 0, 0, 0],
+            unused: [0; 6],
         }));
         assert!(state.update(ServerMessage::LifeManaUpdate {
             bitfield: status_bitfield::<12>(&[
