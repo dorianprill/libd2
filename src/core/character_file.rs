@@ -394,19 +394,26 @@ impl CharacterFile {
         raw
     }
 
-    pub fn set_header_fields(&mut self, name: &str, status: CharacterStatus, class: CharacterClass, level: u8, progression: Option<CharacterProgression>) -> Result<(), CharacterExportError> {
+    pub fn set_header_fields(
+        &mut self,
+        name: &str,
+        status: CharacterStatus,
+        class: CharacterClass,
+        level: u8,
+        progression: Option<CharacterProgression>,
+    ) -> Result<(), CharacterExportError> {
         let layout = self.header.layout;
         let bytes = name.as_bytes();
         let len = bytes.len().min(15);
         let name_offset = layout.name_offset();
-        
+
         self.raw[name_offset..name_offset + 16].fill(0);
         self.raw[name_offset..name_offset + len].copy_from_slice(&bytes[..len]);
-        
+
         self.raw[layout.status_offset()] = status.to_byte();
         self.raw[layout.class_offset()] = class as u8;
         self.raw[layout.level_offset()] = level;
-        
+
         if let (Some(prog), Some(prog_offset)) = (progression, layout.progression_offset()) {
             self.raw[prog_offset] = prog.to_v105_byte();
         }
@@ -422,33 +429,54 @@ impl CharacterFile {
         Ok(())
     }
 
-    pub fn replace_stats_and_skills(&mut self, stats_section: &[u8], skills_section: &[u8]) -> Result<(), CharacterExportError> {
+    pub fn replace_stats_and_skills(
+        &mut self,
+        stats_section: &[u8],
+        skills_section: &[u8],
+    ) -> Result<(), CharacterExportError> {
         let start = self.header.layout.section_search_start();
-        
+
         let stats_start = find_section_marker(&self.raw, SaveSectionMarker::Stats, start).ok_or(
-            CharacterExportError::MissingSection { marker: SaveSectionMarker::Stats },
+            CharacterExportError::MissingSection {
+                marker: SaveSectionMarker::Stats,
+            },
         )?;
-        
-        let skills_start = find_section_marker(&self.raw, SaveSectionMarker::Skills, stats_start + 2).ok_or(
-            CharacterExportError::MissingSection { marker: SaveSectionMarker::Skills },
-        )?;
-        
+
+        let skills_start =
+            find_section_marker(&self.raw, SaveSectionMarker::Skills, stats_start + 2).ok_or(
+                CharacterExportError::MissingSection {
+                    marker: SaveSectionMarker::Skills,
+                },
+            )?;
+
         if self.raw.len() < skills_start + 32 {
-            return Err(CharacterExportError::MissingSection { marker: SaveSectionMarker::Skills });
+            return Err(CharacterExportError::MissingSection {
+                marker: SaveSectionMarker::Skills,
+            });
         }
 
-        self.raw.splice(stats_start..skills_start, stats_section.iter().copied());
-        let new_skills_start = stats_start + stats_section.len();
+        // Splice AFTER the 'gf' marker (which is 2 bytes)
+        self.raw
+            .splice(stats_start + 2..skills_start, stats_section.iter().copied());
+
+        // Find the new skills start (since we just modified the length of the vector)
+        let new_skills_start =
+            find_section_marker(&self.raw, SaveSectionMarker::Skills, stats_start + 2).unwrap();
+
+        // Splice AFTER the 'if' marker (which is 2 bytes)
         self.raw.splice(
-            new_skills_start..new_skills_start + 32,
+            new_skills_start + 2..new_skills_start + 32,
             skills_section.iter().copied(),
         );
-        
+
         fix_header(&mut self.raw);
         Ok(())
     }
 
-    pub fn replace_quests(&mut self, quests: &[[u16; quest::SAVE_QUEST_WORDS_PER_DIFFICULTY]; 3]) -> Result<(), CharacterExportError> {
+    pub fn replace_quests(
+        &mut self,
+        quests: &[[u16; quest::SAVE_QUEST_WORDS_PER_DIFFICULTY]; 3],
+    ) -> Result<(), CharacterExportError> {
         let start = self.header.layout.section_search_start();
         quest::write_legacy_quest_words(&mut self.raw, start, quests);
         quest::apply_progression_from_quests(&mut self.raw, start, quests);
@@ -456,7 +484,10 @@ impl CharacterFile {
         Ok(())
     }
 
-    pub fn replace_waypoints(&mut self, waypoints: &[[bool; waypoint::WAYPOINT_COUNT]; 3]) -> Result<(), CharacterExportError> {
+    pub fn replace_waypoints(
+        &mut self,
+        waypoints: &[[bool; waypoint::WAYPOINT_COUNT]; 3],
+    ) -> Result<(), CharacterExportError> {
         let start = self.header.layout.section_search_start();
         waypoint::write_legacy_waypoints(&mut self.raw, start, waypoints);
         fix_header(&mut self.raw);

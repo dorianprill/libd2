@@ -352,7 +352,10 @@ pub fn initial_template_quests() -> [[u16; SAVE_QUEST_WORDS_PER_DIFFICULTY]; 3] 
 }
 
 /// Parses legacy `.d2s` quest words from a raw save buffer.
-pub fn parse_legacy_quest_words(raw: &[u8], start_offset: usize) -> Option<[[u16; SAVE_QUEST_WORDS_PER_DIFFICULTY]; 3]> {
+pub fn parse_legacy_quest_words(
+    raw: &[u8],
+    start_offset: usize,
+) -> Option<[[u16; SAVE_QUEST_WORDS_PER_DIFFICULTY]; 3]> {
     let search_space = raw.get(start_offset..)?;
     let marker = search_space
         .windows(SAVE_QUEST_SECTION_MARKER.len())
@@ -380,7 +383,9 @@ pub fn write_legacy_quest_words(
     start_offset: usize,
     quests: &[[u16; SAVE_QUEST_WORDS_PER_DIFFICULTY]; 3],
 ) -> bool {
-    let Some(search_space) = raw.get(start_offset..) else { return false; };
+    let Some(search_space) = raw.get(start_offset..) else {
+        return false;
+    };
     let Some(marker_rel) = search_space
         .windows(SAVE_QUEST_SECTION_MARKER.len())
         .position(|window| window == SAVE_QUEST_SECTION_MARKER)
@@ -451,11 +456,10 @@ pub fn progression_from_quests(quests: &[[u16; SAVE_QUEST_WORDS_PER_DIFFICULTY];
 /// Raises the legacy save header progression byte to match completed quests.
 pub fn apply_progression_from_quests(
     raw: &mut [u8],
-    start_offset: usize,
+    _start_offset: usize,
     quests: &[[u16; SAVE_QUEST_WORDS_PER_DIFFICULTY]; 3],
 ) {
     let progression = progression_from_quests(quests);
-    let layout = crate::core::character_file::CharacterHeaderLayout::Legacy;
     // Just a basic fallback, D2R needs exact header layout offset.
     if let Some(byte) = raw.get_mut(LEGACY_PROGRESSION_OFFSET) {
         *byte = (*byte).max(progression);

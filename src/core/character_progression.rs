@@ -292,7 +292,17 @@ impl ClassGrowth {
                 stat_points_per_level: 5,
                 skill_points_per_level: 1,
             },
-            CharacterClass::Druid | CharacterClass::Warlock => Self {
+            CharacterClass::Druid => Self {
+                life_per_level_quarters: 6,
+                stamina_per_level_quarters: 4,
+                mana_per_level_quarters: 8,
+                life_per_vitality_quarters: 8,
+                stamina_per_vitality_quarters: 4,
+                mana_per_energy_quarters: 8,
+                stat_points_per_level: 5,
+                skill_points_per_level: 1,
+            },
+            CharacterClass::Warlock => Self {
                 life_per_level_quarters: 6,
                 stamina_per_level_quarters: 4,
                 mana_per_level_quarters: 8,

@@ -164,7 +164,10 @@ pub const WAYPOINT_ACTS: [WaypointAct; 5] = [
 ];
 
 /// Parses legacy `.d2s` waypoint flags from a raw save buffer.
-pub fn parse_legacy_waypoints(raw: &[u8], start_offset: usize) -> Option<[[bool; WAYPOINT_COUNT]; 3]> {
+pub fn parse_legacy_waypoints(
+    raw: &[u8],
+    start_offset: usize,
+) -> Option<[[bool; WAYPOINT_COUNT]; 3]> {
     let search_space = raw.get(start_offset..)?;
     let marker = search_space
         .windows(LEGACY_WAYPOINT_SECTION_MARKER.len())
@@ -189,8 +192,14 @@ pub fn parse_legacy_waypoints(raw: &[u8], start_offset: usize) -> Option<[[bool;
 }
 
 /// Writes legacy `.d2s` waypoint flags into a raw save buffer when the section exists.
-pub fn write_legacy_waypoints(raw: &mut [u8], start_offset: usize, waypoints: &[[bool; WAYPOINT_COUNT]; 3]) -> bool {
-    let Some(search_space) = raw.get(start_offset..) else { return false; };
+pub fn write_legacy_waypoints(
+    raw: &mut [u8],
+    start_offset: usize,
+    waypoints: &[[bool; WAYPOINT_COUNT]; 3],
+) -> bool {
+    let Some(search_space) = raw.get(start_offset..) else {
+        return false;
+    };
     let Some(marker_rel) = search_space
         .windows(LEGACY_WAYPOINT_SECTION_MARKER.len())
         .position(|window| window == LEGACY_WAYPOINT_SECTION_MARKER)

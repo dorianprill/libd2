@@ -144,14 +144,28 @@ const ASSASSIN_SKILL_CATEGORIES: [SkillCategory; 3] = [
     },
 ];
 
+const WARLOCK_SUMMONING: [usize; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+const WARLOCK_BLOOD: [usize; 10] = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
+const WARLOCK_SHADOW: [usize; 10] = [20, 21, 22, 23, 24, 25, 26, 27, 28, 29];
+const WARLOCK_SKILL_CATEGORIES: [SkillCategory; 3] = [
+    SkillCategory {
+        name: "Summoning",
+        slots: &WARLOCK_SUMMONING,
+    },
+    SkillCategory {
+        name: "Blood",
+        slots: &WARLOCK_BLOOD,
+    },
+    SkillCategory {
+        name: "Shadow",
+        slots: &WARLOCK_SHADOW,
+    },
+];
+
 const WARLOCK_SKILLS: [usize; 30] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
     26, 27, 28, 29,
 ];
-const WARLOCK_SKILL_CATEGORIES: [SkillCategory; 1] = [SkillCategory {
-    name: "Warlock Skills",
-    slots: &WARLOCK_SKILLS,
-}];
 
 /// Returns the localized English skill name for a class-local save slot.
 pub fn skill_name(class: CharacterClass, slot: usize) -> &'static str {
@@ -387,7 +401,39 @@ pub fn skill_name(class: CharacterClass, slot: usize) -> &'static str {
             29 => "Phoenix Strike",
             _ => "Unknown",
         },
-        CharacterClass::Warlock => "Warlock Skill",
+        CharacterClass::Warlock => match slot {
+            0 => "Summon Goatman",
+            1 => "Demonic Mastery",
+            2 => "Summon Tainted",
+            3 => "Summon Defiler",
+            4 => "Bind Demon",
+            5 => "Summon Imp",
+            6 => "Summon Succubus",
+            7 => "Summon Balrog",
+            8 => "Nether Shield",
+            9 => "Void Warp",
+            10 => "Death Mark",
+            11 => "Blood Oath",
+            12 => "Engorge",
+            13 => "Blood Boil",
+            14 => "Blood Moon",
+            15 => "Exsanguinate",
+            16 => "Hemorrhage",
+            17 => "Gore Blast",
+            18 => "Sanguine Bond",
+            19 => "Siphon Life",
+            20 => "Eldritch Blast",
+            21 => "Hex Bane",
+            22 => "Hex Siphon",
+            23 => "Psychic Ward",
+            24 => "Hex Purge",
+            25 => "Sigil Lethargy",
+            26 => "Sigil Rancor",
+            27 => "Sigil Death",
+            28 => "Levitate",
+            29 => "Apocalypse",
+            _ => "Unknown",
+        },
     }
 }
 
@@ -409,890 +455,262 @@ pub fn skill_categories(class: CharacterClass) -> &'static [SkillCategory] {
 pub fn skill_requirement(class: CharacterClass, slot: usize) -> SkillRequirement {
     match class {
         CharacterClass::Amazon => match slot {
-            0 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            1 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            2 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            3 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            4 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            5 => SkillRequirement {
-                level: 6,
-                prereqs: &[],
-            },
-            6 => SkillRequirement {
-                level: 6,
-                prereqs: &[0],
-            },
-            7 => SkillRequirement {
-                level: 6,
-                prereqs: &[],
-            },
-            8 => SkillRequirement {
-                level: 6,
-                prereqs: &[4],
-            },
-            9 => SkillRequirement {
-                level: 6,
-                prereqs: &[],
-            },
-            10 => SkillRequirement {
-                level: 12,
-                prereqs: &[1, 6],
-            },
-            11 => SkillRequirement {
-                level: 12,
-                prereqs: &[2],
-            },
-            12 => SkillRequirement {
-                level: 12,
-                prereqs: &[7],
-            },
-            13 => SkillRequirement {
-                level: 12,
-                prereqs: &[4],
-            },
-            14 => SkillRequirement {
-                level: 12,
-                prereqs: &[9],
-            },
-            15 => SkillRequirement {
-                level: 18,
-                prereqs: &[5],
-            },
-            16 => SkillRequirement {
-                level: 18,
-                prereqs: &[5, 6],
-            },
-            17 => SkillRequirement {
-                level: 18,
-                prereqs: &[3],
-            },
-            18 => SkillRequirement {
-                level: 18,
-                prereqs: &[8, 14],
-            },
-            19 => SkillRequirement {
-                level: 18,
-                prereqs: &[14],
-            },
-            20 => SkillRequirement {
-                level: 24,
-                prereqs: &[16],
-            },
-            21 => SkillRequirement {
-                level: 24,
-                prereqs: &[10],
-            },
-            22 => SkillRequirement {
-                level: 24,
-                prereqs: &[11],
-            },
-            23 => SkillRequirement {
-                level: 24,
-                prereqs: &[12],
-            },
-            24 => SkillRequirement {
-                level: 24,
-                prereqs: &[13],
-            },
-            25 => SkillRequirement {
-                level: 30,
-                prereqs: &[15],
-            },
-            26 => SkillRequirement {
-                level: 30,
-                prereqs: &[22, 23],
-            },
-            27 => SkillRequirement {
-                level: 30,
-                prereqs: &[17],
-            },
-            28 => SkillRequirement {
-                level: 30,
-                prereqs: &[18],
-            },
-            29 => SkillRequirement {
-                level: 30,
-                prereqs: &[19],
-            },
-            _ => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
+            0 => SkillRequirement { level: 1, prereqs: &[] },
+            1 => SkillRequirement { level: 1, prereqs: &[] },
+            2 => SkillRequirement { level: 1, prereqs: &[] },
+            3 => SkillRequirement { level: 1, prereqs: &[] },
+            4 => SkillRequirement { level: 1, prereqs: &[] },
+            5 => SkillRequirement { level: 6, prereqs: &[] },
+            6 => SkillRequirement { level: 6, prereqs: &[0] },
+            7 => SkillRequirement { level: 6, prereqs: &[] },
+            8 => SkillRequirement { level: 6, prereqs: &[4] },
+            9 => SkillRequirement { level: 6, prereqs: &[] },
+            10 => SkillRequirement { level: 12, prereqs: &[1, 6] },
+            11 => SkillRequirement { level: 12, prereqs: &[2] },
+            12 => SkillRequirement { level: 12, prereqs: &[7] },
+            13 => SkillRequirement { level: 12, prereqs: &[4] },
+            14 => SkillRequirement { level: 12, prereqs: &[9] },
+            15 => SkillRequirement { level: 18, prereqs: &[5] },
+            16 => SkillRequirement { level: 18, prereqs: &[5, 6] },
+            17 => SkillRequirement { level: 18, prereqs: &[3] },
+            18 => SkillRequirement { level: 18, prereqs: &[8, 14] },
+            19 => SkillRequirement { level: 18, prereqs: &[14] },
+            20 => SkillRequirement { level: 24, prereqs: &[16] },
+            21 => SkillRequirement { level: 24, prereqs: &[10] },
+            22 => SkillRequirement { level: 24, prereqs: &[11] },
+            23 => SkillRequirement { level: 24, prereqs: &[12] },
+            24 => SkillRequirement { level: 24, prereqs: &[13] },
+            25 => SkillRequirement { level: 30, prereqs: &[15] },
+            26 => SkillRequirement { level: 30, prereqs: &[22, 23] },
+            27 => SkillRequirement { level: 30, prereqs: &[17] },
+            28 => SkillRequirement { level: 30, prereqs: &[18] },
+            29 => SkillRequirement { level: 30, prereqs: &[19] },
+            _ => SkillRequirement { level: 1, prereqs: &[] },
         },
         CharacterClass::Sorceress => match slot {
-            0 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            1 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            2 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            3 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            4 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            5 => SkillRequirement {
-                level: 6,
-                prereqs: &[],
-            },
-            6 => SkillRequirement {
-                level: 6,
-                prereqs: &[],
-            },
-            7 => SkillRequirement {
-                level: 6,
-                prereqs: &[],
-            },
-            8 => SkillRequirement {
-                level: 6,
-                prereqs: &[],
-            },
-            9 => SkillRequirement {
-                level: 6,
-                prereqs: &[3],
-            },
-            10 => SkillRequirement {
-                level: 12,
-                prereqs: &[5],
-            },
-            11 => SkillRequirement {
-                level: 12,
-                prereqs: &[0],
-            },
-            12 => SkillRequirement {
-                level: 12,
-                prereqs: &[6],
-            },
-            13 => SkillRequirement {
-                level: 12,
-                prereqs: &[2],
-            },
-            14 => SkillRequirement {
-                level: 12,
-                prereqs: &[9, 4],
-            },
-            15 => SkillRequirement {
-                level: 18,
-                prereqs: &[10],
-            },
-            16 => SkillRequirement {
-                level: 18,
-                prereqs: &[1, 11],
-            },
-            17 => SkillRequirement {
-                level: 18,
-                prereqs: &[13],
-            },
-            18 => SkillRequirement {
-                level: 18,
-                prereqs: &[7],
-            },
-            19 => SkillRequirement {
-                level: 18,
-                prereqs: &[9],
-            },
-            20 => SkillRequirement {
-                level: 24,
-                prereqs: &[11, 15],
-            },
-            21 => SkillRequirement {
-                level: 24,
-                prereqs: &[12, 17],
-            },
-            22 => SkillRequirement {
-                level: 24,
-                prereqs: &[18, 17],
-            },
-            23 => SkillRequirement {
-                level: 24,
-                prereqs: &[8, 19],
-            },
-            24 => SkillRequirement {
-                level: 24,
-                prereqs: &[14],
-            },
-            25 => SkillRequirement {
-                level: 30,
-                prereqs: &[],
-            },
-            26 => SkillRequirement {
-                level: 30,
-                prereqs: &[16],
-            },
-            27 => SkillRequirement {
-                level: 30,
-                prereqs: &[],
-            },
-            28 => SkillRequirement {
-                level: 30,
-                prereqs: &[23],
-            },
-            29 => SkillRequirement {
-                level: 30,
-                prereqs: &[],
-            },
-            _ => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
+            0 => SkillRequirement { level: 1, prereqs: &[] },
+            1 => SkillRequirement { level: 1, prereqs: &[] },
+            2 => SkillRequirement { level: 1, prereqs: &[] },
+            3 => SkillRequirement { level: 1, prereqs: &[] },
+            4 => SkillRequirement { level: 1, prereqs: &[] },
+            5 => SkillRequirement { level: 6, prereqs: &[] },
+            6 => SkillRequirement { level: 6, prereqs: &[] },
+            7 => SkillRequirement { level: 6, prereqs: &[] },
+            8 => SkillRequirement { level: 6, prereqs: &[] },
+            9 => SkillRequirement { level: 6, prereqs: &[3] },
+            10 => SkillRequirement { level: 12, prereqs: &[5] },
+            11 => SkillRequirement { level: 12, prereqs: &[0] },
+            12 => SkillRequirement { level: 12, prereqs: &[6] },
+            13 => SkillRequirement { level: 12, prereqs: &[2] },
+            14 => SkillRequirement { level: 12, prereqs: &[9, 4] },
+            15 => SkillRequirement { level: 18, prereqs: &[10] },
+            16 => SkillRequirement { level: 18, prereqs: &[1, 11] },
+            17 => SkillRequirement { level: 18, prereqs: &[13] },
+            18 => SkillRequirement { level: 18, prereqs: &[7] },
+            19 => SkillRequirement { level: 18, prereqs: &[9] },
+            20 => SkillRequirement { level: 24, prereqs: &[11, 15] },
+            21 => SkillRequirement { level: 24, prereqs: &[12, 17] },
+            22 => SkillRequirement { level: 24, prereqs: &[18, 17] },
+            23 => SkillRequirement { level: 24, prereqs: &[8, 19] },
+            24 => SkillRequirement { level: 24, prereqs: &[14] },
+            25 => SkillRequirement { level: 30, prereqs: &[] },
+            26 => SkillRequirement { level: 30, prereqs: &[16] },
+            27 => SkillRequirement { level: 30, prereqs: &[] },
+            28 => SkillRequirement { level: 30, prereqs: &[23] },
+            29 => SkillRequirement { level: 30, prereqs: &[] },
+            _ => SkillRequirement { level: 1, prereqs: &[] },
         },
         CharacterClass::Necromancer => match slot {
-            0 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            1 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            2 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            3 => SkillRequirement {
-                level: 1,
-                prereqs: &[4],
-            },
-            4 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            5 => SkillRequirement {
-                level: 6,
-                prereqs: &[],
-            },
-            6 => SkillRequirement {
-                level: 6,
-                prereqs: &[0],
-            },
-            7 => SkillRequirement {
-                level: 6,
-                prereqs: &[],
-            },
-            8 => SkillRequirement {
-                level: 6,
-                prereqs: &[1],
-            },
-            9 => SkillRequirement {
-                level: 6,
-                prereqs: &[],
-            },
-            10 => SkillRequirement {
-                level: 12,
-                prereqs: &[0],
-            },
-            11 => SkillRequirement {
-                level: 12,
-                prereqs: &[6],
-            },
-            12 => SkillRequirement {
-                level: 12,
-                prereqs: &[2],
-            },
-            13 => SkillRequirement {
-                level: 12,
-                prereqs: &[9],
-            },
-            14 => SkillRequirement {
-                level: 12,
-                prereqs: &[4],
-            },
-            15 => SkillRequirement {
-                level: 18,
-                prereqs: &[5],
-            },
-            16 => SkillRequirement {
-                level: 18,
-                prereqs: &[10],
-            },
-            17 => SkillRequirement {
-                level: 18,
-                prereqs: &[7, 8],
-            },
-            18 => SkillRequirement {
-                level: 18,
-                prereqs: &[8],
-            },
-            19 => SkillRequirement {
-                level: 18,
-                prereqs: &[9],
-            },
-            20 => SkillRequirement {
-                level: 24,
-                prereqs: &[15],
-            },
-            21 => SkillRequirement {
-                level: 24,
-                prereqs: &[11],
-            },
-            22 => SkillRequirement {
-                level: 24,
-                prereqs: &[12, 18],
-            },
-            23 => SkillRequirement {
-                level: 24,
-                prereqs: &[13],
-            },
-            24 => SkillRequirement {
-                level: 24,
-                prereqs: &[19],
-            },
-            25 => SkillRequirement {
-                level: 30,
-                prereqs: &[16, 21],
-            },
-            26 => SkillRequirement {
-                level: 30,
-                prereqs: &[17],
-            },
-            27 => SkillRequirement {
-                level: 30,
-                prereqs: &[18],
-            },
-            28 => SkillRequirement {
-                level: 30,
-                prereqs: &[24],
-            },
-            29 => SkillRequirement {
-                level: 30,
-                prereqs: &[14, 24],
-            },
-            _ => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
+            0 => SkillRequirement { level: 1, prereqs: &[] },
+            1 => SkillRequirement { level: 1, prereqs: &[] },
+            2 => SkillRequirement { level: 1, prereqs: &[] },
+            3 => SkillRequirement { level: 1, prereqs: &[4] },
+            4 => SkillRequirement { level: 1, prereqs: &[] },
+            5 => SkillRequirement { level: 6, prereqs: &[] },
+            6 => SkillRequirement { level: 6, prereqs: &[0] },
+            7 => SkillRequirement { level: 6, prereqs: &[] },
+            8 => SkillRequirement { level: 6, prereqs: &[1] },
+            9 => SkillRequirement { level: 6, prereqs: &[] },
+            10 => SkillRequirement { level: 12, prereqs: &[0] },
+            11 => SkillRequirement { level: 12, prereqs: &[6] },
+            12 => SkillRequirement { level: 12, prereqs: &[2] },
+            13 => SkillRequirement { level: 12, prereqs: &[9] },
+            14 => SkillRequirement { level: 12, prereqs: &[4] },
+            15 => SkillRequirement { level: 18, prereqs: &[5] },
+            16 => SkillRequirement { level: 18, prereqs: &[10] },
+            17 => SkillRequirement { level: 18, prereqs: &[7, 8] },
+            18 => SkillRequirement { level: 18, prereqs: &[8] },
+            19 => SkillRequirement { level: 18, prereqs: &[9] },
+            20 => SkillRequirement { level: 24, prereqs: &[15] },
+            21 => SkillRequirement { level: 24, prereqs: &[11] },
+            22 => SkillRequirement { level: 24, prereqs: &[12, 18] },
+            23 => SkillRequirement { level: 24, prereqs: &[13] },
+            24 => SkillRequirement { level: 24, prereqs: &[19] },
+            25 => SkillRequirement { level: 30, prereqs: &[16, 21] },
+            26 => SkillRequirement { level: 30, prereqs: &[17] },
+            27 => SkillRequirement { level: 30, prereqs: &[18] },
+            28 => SkillRequirement { level: 30, prereqs: &[24] },
+            29 => SkillRequirement { level: 30, prereqs: &[14, 24] },
+            _ => SkillRequirement { level: 1, prereqs: &[] },
         },
         CharacterClass::Paladin => match slot {
-            0 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            1 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            2 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            3 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            4 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            5 => SkillRequirement {
-                level: 6,
-                prereqs: &[],
-            },
-            6 => SkillRequirement {
-                level: 6,
-                prereqs: &[2],
-            },
-            7 => SkillRequirement {
-                level: 6,
-                prereqs: &[],
-            },
-            8 => SkillRequirement {
-                level: 6,
-                prereqs: &[],
-            },
-            9 => SkillRequirement {
-                level: 6,
-                prereqs: &[],
-            },
-            10 => SkillRequirement {
-                level: 12,
-                prereqs: &[0],
-            },
-            11 => SkillRequirement {
-                level: 12,
-                prereqs: &[1],
-            },
-            12 => SkillRequirement {
-                level: 12,
-                prereqs: &[2],
-            },
-            13 => SkillRequirement {
-                level: 12,
-                prereqs: &[3],
-            },
-            14 => SkillRequirement {
-                level: 12,
-                prereqs: &[],
-            },
-            15 => SkillRequirement {
-                level: 18,
-                prereqs: &[10],
-            },
-            16 => SkillRequirement {
-                level: 18,
-                prereqs: &[5],
-            },
-            17 => SkillRequirement {
-                level: 18,
-                prereqs: &[12],
-            },
-            18 => SkillRequirement {
-                level: 18,
-                prereqs: &[6],
-            },
-            19 => SkillRequirement {
-                level: 18,
-                prereqs: &[13, 8],
-            },
-            20 => SkillRequirement {
-                level: 24,
-                prereqs: &[15],
-            },
-            21 => SkillRequirement {
-                level: 24,
-                prereqs: &[11, 16],
-            },
-            22 => SkillRequirement {
-                level: 24,
-                prereqs: &[18],
-            },
-            23 => SkillRequirement {
-                level: 24,
-                prereqs: &[7, 18],
-            },
-            24 => SkillRequirement {
-                level: 24,
-                prereqs: &[13],
-            },
-            25 => SkillRequirement {
-                level: 30,
-                prereqs: &[16, 20],
-            },
-            26 => SkillRequirement {
-                level: 30,
-                prereqs: &[17],
-            },
-            27 => SkillRequirement {
-                level: 30,
-                prereqs: &[23],
-            },
-            28 => SkillRequirement {
-                level: 30,
-                prereqs: &[19],
-            },
-            29 => SkillRequirement {
-                level: 30,
-                prereqs: &[],
-            },
-            _ => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
+            0 => SkillRequirement { level: 1, prereqs: &[] },
+            1 => SkillRequirement { level: 1, prereqs: &[] },
+            2 => SkillRequirement { level: 1, prereqs: &[] },
+            3 => SkillRequirement { level: 1, prereqs: &[] },
+            4 => SkillRequirement { level: 1, prereqs: &[] },
+            5 => SkillRequirement { level: 6, prereqs: &[] },
+            6 => SkillRequirement { level: 6, prereqs: &[2] },
+            7 => SkillRequirement { level: 6, prereqs: &[] },
+            8 => SkillRequirement { level: 6, prereqs: &[] },
+            9 => SkillRequirement { level: 6, prereqs: &[] },
+            10 => SkillRequirement { level: 12, prereqs: &[0] },
+            11 => SkillRequirement { level: 12, prereqs: &[1] },
+            12 => SkillRequirement { level: 12, prereqs: &[2] },
+            13 => SkillRequirement { level: 12, prereqs: &[3] },
+            14 => SkillRequirement { level: 12, prereqs: &[] },
+            15 => SkillRequirement { level: 18, prereqs: &[10] },
+            16 => SkillRequirement { level: 18, prereqs: &[5] },
+            17 => SkillRequirement { level: 18, prereqs: &[12] },
+            18 => SkillRequirement { level: 18, prereqs: &[6] },
+            19 => SkillRequirement { level: 18, prereqs: &[13, 8] },
+            20 => SkillRequirement { level: 24, prereqs: &[15] },
+            21 => SkillRequirement { level: 24, prereqs: &[11, 16] },
+            22 => SkillRequirement { level: 24, prereqs: &[18] },
+            23 => SkillRequirement { level: 24, prereqs: &[7, 18] },
+            24 => SkillRequirement { level: 24, prereqs: &[13] },
+            25 => SkillRequirement { level: 30, prereqs: &[16, 20] },
+            26 => SkillRequirement { level: 30, prereqs: &[17] },
+            27 => SkillRequirement { level: 30, prereqs: &[23] },
+            28 => SkillRequirement { level: 30, prereqs: &[19] },
+            29 => SkillRequirement { level: 30, prereqs: &[] },
+            _ => SkillRequirement { level: 1, prereqs: &[] },
         },
         CharacterClass::Barbarian => match slot {
-            0 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            1 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            2 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            3 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            4 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            5 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            6 => SkillRequirement {
-                level: 6,
-                prereqs: &[],
-            },
-            7 => SkillRequirement {
-                level: 6,
-                prereqs: &[0],
-            },
-            8 => SkillRequirement {
-                level: 6,
-                prereqs: &[],
-            },
-            9 => SkillRequirement {
-                level: 6,
-                prereqs: &[],
-            },
-            10 => SkillRequirement {
-                level: 6,
-                prereqs: &[],
-            },
-            11 => SkillRequirement {
-                level: 6,
-                prereqs: &[4],
-            },
-            12 => SkillRequirement {
-                level: 6,
-                prereqs: &[4],
-            },
-            13 => SkillRequirement {
-                level: 12,
-                prereqs: &[0],
-            },
-            14 => SkillRequirement {
-                level: 12,
-                prereqs: &[7],
-            },
-            15 => SkillRequirement {
-                level: 12,
-                prereqs: &[],
-            },
-            16 => SkillRequirement {
-                level: 12,
-                prereqs: &[5],
-            },
-            17 => SkillRequirement {
-                level: 18,
-                prereqs: &[6],
-            },
-            18 => SkillRequirement {
-                level: 18,
-                prereqs: &[13],
-            },
-            19 => SkillRequirement {
-                level: 18,
-                prereqs: &[],
-            },
-            20 => SkillRequirement {
-                level: 18,
-                prereqs: &[11],
-            },
-            21 => SkillRequirement {
-                level: 24,
-                prereqs: &[14],
-            },
-            22 => SkillRequirement {
-                level: 24,
-                prereqs: &[15],
-            },
-            23 => SkillRequirement {
-                level: 24,
-                prereqs: &[12],
-            },
-            24 => SkillRequirement {
-                level: 24,
-                prereqs: &[16],
-            },
-            25 => SkillRequirement {
-                level: 30,
-                prereqs: &[17, 18],
-            },
-            26 => SkillRequirement {
-                level: 30,
-                prereqs: &[18],
-            },
-            27 => SkillRequirement {
-                level: 30,
-                prereqs: &[19],
-            },
-            28 => SkillRequirement {
-                level: 30,
-                prereqs: &[20, 23],
-            },
-            29 => SkillRequirement {
-                level: 30,
-                prereqs: &[23],
-            },
-            _ => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
+            0 => SkillRequirement { level: 1, prereqs: &[] },
+            1 => SkillRequirement { level: 1, prereqs: &[] },
+            2 => SkillRequirement { level: 1, prereqs: &[] },
+            3 => SkillRequirement { level: 1, prereqs: &[] },
+            4 => SkillRequirement { level: 1, prereqs: &[] },
+            5 => SkillRequirement { level: 1, prereqs: &[] },
+            6 => SkillRequirement { level: 6, prereqs: &[] },
+            7 => SkillRequirement { level: 6, prereqs: &[0] },
+            8 => SkillRequirement { level: 6, prereqs: &[] },
+            9 => SkillRequirement { level: 6, prereqs: &[] },
+            10 => SkillRequirement { level: 6, prereqs: &[] },
+            11 => SkillRequirement { level: 6, prereqs: &[4] },
+            12 => SkillRequirement { level: 6, prereqs: &[4] },
+            13 => SkillRequirement { level: 12, prereqs: &[0] },
+            14 => SkillRequirement { level: 12, prereqs: &[7] },
+            15 => SkillRequirement { level: 12, prereqs: &[] },
+            16 => SkillRequirement { level: 12, prereqs: &[5] },
+            17 => SkillRequirement { level: 18, prereqs: &[6] },
+            18 => SkillRequirement { level: 18, prereqs: &[13] },
+            19 => SkillRequirement { level: 18, prereqs: &[] },
+            20 => SkillRequirement { level: 18, prereqs: &[11] },
+            21 => SkillRequirement { level: 24, prereqs: &[14] },
+            22 => SkillRequirement { level: 24, prereqs: &[15] },
+            23 => SkillRequirement { level: 24, prereqs: &[12] },
+            24 => SkillRequirement { level: 24, prereqs: &[16] },
+            25 => SkillRequirement { level: 30, prereqs: &[17, 18] },
+            26 => SkillRequirement { level: 30, prereqs: &[18] },
+            27 => SkillRequirement { level: 30, prereqs: &[19] },
+            28 => SkillRequirement { level: 30, prereqs: &[20, 23] },
+            29 => SkillRequirement { level: 30, prereqs: &[23] },
+            _ => SkillRequirement { level: 1, prereqs: &[] },
         },
         CharacterClass::Druid => match slot {
-            0 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            1 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            2 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            3 => SkillRequirement {
-                level: 1,
-                prereqs: &[2],
-            },
-            4 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            5 => SkillRequirement {
-                level: 6,
-                prereqs: &[],
-            },
-            6 => SkillRequirement {
-                level: 6,
-                prereqs: &[0],
-            },
-            7 => SkillRequirement {
-                level: 6,
-                prereqs: &[],
-            },
-            8 => SkillRequirement {
-                level: 6,
-                prereqs: &[4],
-            },
-            9 => SkillRequirement {
-                level: 6,
-                prereqs: &[],
-            },
-            10 => SkillRequirement {
-                level: 12,
-                prereqs: &[1],
-            },
-            11 => SkillRequirement {
-                level: 12,
-                prereqs: &[2],
-            },
-            12 => SkillRequirement {
-                level: 12,
-                prereqs: &[7],
-            },
-            13 => SkillRequirement {
-                level: 12,
-                prereqs: &[8],
-            },
-            14 => SkillRequirement {
-                level: 12,
-                prereqs: &[9],
-            },
-            15 => SkillRequirement {
-                level: 18,
-                prereqs: &[5],
-            },
-            16 => SkillRequirement {
-                level: 18,
-                prereqs: &[5, 6],
-            },
-            17 => SkillRequirement {
-                level: 18,
-                prereqs: &[11],
-            },
-            18 => SkillRequirement {
-                level: 18,
-                prereqs: &[11, 12],
-            },
-            19 => SkillRequirement {
-                level: 18,
-                prereqs: &[14],
-            },
-            20 => SkillRequirement {
-                level: 24,
-                prereqs: &[10],
-            },
-            21 => SkillRequirement {
-                level: 24,
-                prereqs: &[18],
-            },
-            22 => SkillRequirement {
-                level: 24,
-                prereqs: &[12],
-            },
-            23 => SkillRequirement {
-                level: 24,
-                prereqs: &[13],
-            },
-            24 => SkillRequirement {
-                level: 24,
-                prereqs: &[19],
-            },
-            25 => SkillRequirement {
-                level: 30,
-                prereqs: &[15],
-            },
-            26 => SkillRequirement {
-                level: 30,
-                prereqs: &[16],
-            },
-            27 => SkillRequirement {
-                level: 30,
-                prereqs: &[17],
-            },
-            28 => SkillRequirement {
-                level: 30,
-                prereqs: &[23, 29],
-            },
-            29 => SkillRequirement {
-                level: 30,
-                prereqs: &[24],
-            },
-            _ => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
+            0 => SkillRequirement { level: 1, prereqs: &[] },
+            1 => SkillRequirement { level: 1, prereqs: &[] },
+            2 => SkillRequirement { level: 1, prereqs: &[] },
+            3 => SkillRequirement { level: 1, prereqs: &[2] },
+            4 => SkillRequirement { level: 1, prereqs: &[] },
+            5 => SkillRequirement { level: 6, prereqs: &[] },
+            6 => SkillRequirement { level: 6, prereqs: &[0] },
+            7 => SkillRequirement { level: 6, prereqs: &[] },
+            8 => SkillRequirement { level: 6, prereqs: &[4] },
+            9 => SkillRequirement { level: 6, prereqs: &[] },
+            10 => SkillRequirement { level: 12, prereqs: &[1] },
+            11 => SkillRequirement { level: 12, prereqs: &[2] },
+            12 => SkillRequirement { level: 12, prereqs: &[7] },
+            13 => SkillRequirement { level: 12, prereqs: &[8] },
+            14 => SkillRequirement { level: 12, prereqs: &[9] },
+            15 => SkillRequirement { level: 18, prereqs: &[5] },
+            16 => SkillRequirement { level: 18, prereqs: &[5, 6] },
+            17 => SkillRequirement { level: 18, prereqs: &[11] },
+            18 => SkillRequirement { level: 18, prereqs: &[11, 12] },
+            19 => SkillRequirement { level: 18, prereqs: &[14] },
+            20 => SkillRequirement { level: 24, prereqs: &[10] },
+            21 => SkillRequirement { level: 24, prereqs: &[18] },
+            22 => SkillRequirement { level: 24, prereqs: &[12] },
+            23 => SkillRequirement { level: 24, prereqs: &[13] },
+            24 => SkillRequirement { level: 24, prereqs: &[19] },
+            25 => SkillRequirement { level: 30, prereqs: &[15] },
+            26 => SkillRequirement { level: 30, prereqs: &[16] },
+            27 => SkillRequirement { level: 30, prereqs: &[17] },
+            28 => SkillRequirement { level: 30, prereqs: &[23, 29] },
+            29 => SkillRequirement { level: 30, prereqs: &[24] },
+            _ => SkillRequirement { level: 1, prereqs: &[] },
         },
         CharacterClass::Assassin => match slot {
-            0 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            1 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            2 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            3 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            4 => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
-            5 => SkillRequirement {
-                level: 6,
-                prereqs: &[0],
-            },
-            6 => SkillRequirement {
-                level: 6,
-                prereqs: &[],
-            },
-            7 => SkillRequirement {
-                level: 6,
-                prereqs: &[1],
-            },
-            8 => SkillRequirement {
-                level: 6,
-                prereqs: &[],
-            },
-            9 => SkillRequirement {
-                level: 6,
-                prereqs: &[4],
-            },
-            10 => SkillRequirement {
-                level: 12,
-                prereqs: &[5],
-            },
-            11 => SkillRequirement {
-                level: 12,
-                prereqs: &[0],
-            },
-            12 => SkillRequirement {
-                level: 12,
-                prereqs: &[1],
-            },
-            13 => SkillRequirement {
-                level: 12,
-                prereqs: &[2],
-            },
-            14 => SkillRequirement {
-                level: 12,
-                prereqs: &[3],
-            },
-            15 => SkillRequirement {
-                level: 18,
-                prereqs: &[6, 11],
-            },
-            16 => SkillRequirement {
-                level: 18,
-                prereqs: &[7],
-            },
-            17 => SkillRequirement {
-                level: 18,
-                prereqs: &[13, 12],
-            },
-            18 => SkillRequirement {
-                level: 18,
-                prereqs: &[8],
-            },
-            19 => SkillRequirement {
-                level: 18,
-                prereqs: &[9],
-            },
-            20 => SkillRequirement {
-                level: 24,
-                prereqs: &[10],
-            },
-            21 => SkillRequirement {
-                level: 24,
-                prereqs: &[11],
-            },
-            22 => SkillRequirement {
-                level: 24,
-                prereqs: &[13],
-            },
-            23 => SkillRequirement {
-                level: 24,
-                prereqs: &[18],
-            },
-            24 => SkillRequirement {
-                level: 24,
-                prereqs: &[19],
-            },
-            25 => SkillRequirement {
-                level: 30,
-                prereqs: &[20],
-            },
-            26 => SkillRequirement {
-                level: 30,
-                prereqs: &[15],
-            },
-            27 => SkillRequirement {
-                level: 30,
-                prereqs: &[16],
-            },
-            28 => SkillRequirement {
-                level: 30,
-                prereqs: &[17],
-            },
-            29 => SkillRequirement {
-                level: 30,
-                prereqs: &[14, 23],
-            },
-            _ => SkillRequirement {
-                level: 1,
-                prereqs: &[],
-            },
+            0 => SkillRequirement { level: 1, prereqs: &[] },
+            1 => SkillRequirement { level: 1, prereqs: &[] },
+            2 => SkillRequirement { level: 1, prereqs: &[] },
+            3 => SkillRequirement { level: 1, prereqs: &[] },
+            4 => SkillRequirement { level: 1, prereqs: &[] },
+            5 => SkillRequirement { level: 6, prereqs: &[0] },
+            6 => SkillRequirement { level: 6, prereqs: &[] },
+            7 => SkillRequirement { level: 6, prereqs: &[1] },
+            8 => SkillRequirement { level: 6, prereqs: &[] },
+            9 => SkillRequirement { level: 6, prereqs: &[4] },
+            10 => SkillRequirement { level: 12, prereqs: &[5] },
+            11 => SkillRequirement { level: 12, prereqs: &[0] },
+            12 => SkillRequirement { level: 12, prereqs: &[1] },
+            13 => SkillRequirement { level: 12, prereqs: &[2] },
+            14 => SkillRequirement { level: 12, prereqs: &[3] },
+            15 => SkillRequirement { level: 18, prereqs: &[6, 11] },
+            16 => SkillRequirement { level: 18, prereqs: &[7] },
+            17 => SkillRequirement { level: 18, prereqs: &[13, 12] },
+            18 => SkillRequirement { level: 18, prereqs: &[8] },
+            19 => SkillRequirement { level: 18, prereqs: &[9] },
+            20 => SkillRequirement { level: 24, prereqs: &[10] },
+            21 => SkillRequirement { level: 24, prereqs: &[11] },
+            22 => SkillRequirement { level: 24, prereqs: &[13] },
+            23 => SkillRequirement { level: 24, prereqs: &[18] },
+            24 => SkillRequirement { level: 24, prereqs: &[19] },
+            25 => SkillRequirement { level: 30, prereqs: &[20] },
+            26 => SkillRequirement { level: 30, prereqs: &[15] },
+            27 => SkillRequirement { level: 30, prereqs: &[16] },
+            28 => SkillRequirement { level: 30, prereqs: &[17] },
+            29 => SkillRequirement { level: 30, prereqs: &[14, 23] },
+            _ => SkillRequirement { level: 1, prereqs: &[] },
         },
-        CharacterClass::Warlock => SkillRequirement {
-            level: 1,
-            prereqs: &[],
+        CharacterClass::Warlock => match slot {
+            0 => SkillRequirement { level: 1, prereqs: &[] },
+            1 => SkillRequirement { level: 1, prereqs: &[] },
+            2 => SkillRequirement { level: 6, prereqs: &[] },
+            3 => SkillRequirement { level: 12, prereqs: &[] },
+            4 => SkillRequirement { level: 18, prereqs: &[] },
+            5 => SkillRequirement { level: 18, prereqs: &[] },
+            6 => SkillRequirement { level: 24, prereqs: &[] },
+            7 => SkillRequirement { level: 30, prereqs: &[] },
+            10 => SkillRequirement { level: 1, prereqs: &[] },
+            11 => SkillRequirement { level: 6, prereqs: &[] },
+            12 => SkillRequirement { level: 12, prereqs: &[] },
+            13 => SkillRequirement { level: 18, prereqs: &[] },
+            14 => SkillRequirement { level: 24, prereqs: &[] },
+            15 => SkillRequirement { level: 30, prereqs: &[] },
+            20 => SkillRequirement { level: 1, prereqs: &[] },
+            21 => SkillRequirement { level: 6, prereqs: &[] },
+            22 => SkillRequirement { level: 12, prereqs: &[] },
+            23 => SkillRequirement { level: 18, prereqs: &[] },
+            24 => SkillRequirement { level: 18, prereqs: &[] },
+            25 => SkillRequirement { level: 24, prereqs: &[] },
+            26 => SkillRequirement { level: 24, prereqs: &[] },
+            27 => SkillRequirement { level: 30, prereqs: &[] },
+            28 => SkillRequirement { level: 1, prereqs: &[] },
+            29 => SkillRequirement { level: 30, prereqs: &[] },
+            _ => SkillRequirement { level: 1, prereqs: &[] },
         },
     }
 }
