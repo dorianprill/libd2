@@ -190,12 +190,12 @@ impl BaseStats {
             },
             CharacterClass::Warlock => Self {
                 str: 15,
-                dex: 25,
-                vit: 15,
-                eng: 25,
-                hp: 45,
-                mana: 25,
-                stamina: 79,
+                dex: 20,
+                vit: 25,
+                eng: 20,
+                hp: 55,
+                mana: 20,
+                stamina: 86,
             },
         }
     }
@@ -237,6 +237,30 @@ impl ClassGrowth {
     /// Whole mana gained by one allocated energy point.
     pub const fn whole_mana_per_energy(self) -> u32 {
         Self::whole_units(self.mana_per_energy_quarters)
+    }
+
+    pub fn life_for_level(&self, level: u32) -> u32 {
+        (level.saturating_sub(1) * self.life_per_level_quarters as u32) / 4
+    }
+
+    pub fn mana_for_level(&self, level: u32) -> u32 {
+        (level.saturating_sub(1) * self.mana_per_level_quarters as u32) / 4
+    }
+
+    pub fn stamina_for_level(&self, level: u32) -> u32 {
+        (level.saturating_sub(1) * self.stamina_per_level_quarters as u32) / 4
+    }
+
+    pub fn life_for_vitality(&self, vitality: u32, base_vitality: u32) -> u32 {
+        (vitality.saturating_sub(base_vitality) * self.life_per_vitality_quarters as u32) / 4
+    }
+
+    pub fn mana_for_energy(&self, energy: u32, base_energy: u32) -> u32 {
+        (energy.saturating_sub(base_energy) * self.mana_per_energy_quarters as u32) / 4
+    }
+
+    pub fn stamina_for_vitality(&self, vitality: u32, base_vitality: u32) -> u32 {
+        (vitality.saturating_sub(base_vitality) * self.stamina_per_vitality_quarters as u32) / 4
     }
 
     /// Returns class-specific resource and point growth for `class`.
@@ -303,10 +327,10 @@ impl ClassGrowth {
                 skill_points_per_level: 1,
             },
             CharacterClass::Warlock => Self {
-                life_per_level_quarters: 6,
+                life_per_level_quarters: 12,
                 stamina_per_level_quarters: 4,
                 mana_per_level_quarters: 8,
-                life_per_vitality_quarters: 8,
+                life_per_vitality_quarters: 12,
                 stamina_per_vitality_quarters: 4,
                 mana_per_energy_quarters: 8,
                 stat_points_per_level: 5,
@@ -390,6 +414,7 @@ mod tests {
         assert_eq!(amazon.hp, 50);
 
         let sorceress = BaseStats::for_class(CharacterClass::Sorceress);
+        assert_eq!(sorceress.str, 10);
         assert_eq!(sorceress.eng, 35);
         assert_eq!(sorceress.mana, 35);
 

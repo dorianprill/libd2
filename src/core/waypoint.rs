@@ -13,6 +13,8 @@ pub const LEGACY_WAYPOINT_SECTION_MARKER: [u8; 2] = *b"WS";
 /// Fixed bytes after `WS` in legacy waypoint sections.
 pub const LEGACY_WAYPOINT_SECTION_HEADER_AFTER_MARKER: [u8; 6] =
     [0x06, 0x00, 0x00, 0x00, 0x50, 0x00];
+/// Fixed bytes after `WS` in Resurrected v105/RotW waypoint sections.
+pub const V105_WAYPOINT_SECTION_HEADER_AFTER_MARKER: [u8; 6] = [0x01, 0x00, 0x00, 0x00, 0x50, 0x00];
 /// Legacy waypoint-section trailer byte offset from the `WS` marker.
 pub const LEGACY_WAYPOINT_TRAILER_OFFSET: usize =
     LEGACY_WAYPOINT_SECTION_HEADER_BYTES + 3 * LEGACY_WAYPOINT_BYTES_PER_DIFFICULTY;
@@ -197,6 +199,34 @@ pub fn write_legacy_waypoints(
     start_offset: usize,
     waypoints: &[[bool; WAYPOINT_COUNT]; 3],
 ) -> bool {
+    write_waypoints_with_header(
+        raw,
+        start_offset,
+        waypoints,
+        LEGACY_WAYPOINT_SECTION_HEADER_AFTER_MARKER,
+    )
+}
+
+/// Writes v105 `.d2s` waypoint flags while preserving the v105 section header.
+pub fn write_v105_waypoints(
+    raw: &mut [u8],
+    start_offset: usize,
+    waypoints: &[[bool; WAYPOINT_COUNT]; 3],
+) -> bool {
+    write_waypoints_with_header(
+        raw,
+        start_offset,
+        waypoints,
+        V105_WAYPOINT_SECTION_HEADER_AFTER_MARKER,
+    )
+}
+
+fn write_waypoints_with_header(
+    raw: &mut [u8],
+    start_offset: usize,
+    waypoints: &[[bool; WAYPOINT_COUNT]; 3],
+    header_after_marker: [u8; 6],
+) -> bool {
     let Some(search_space) = raw.get(start_offset..) else {
         return false;
     };
@@ -211,7 +241,7 @@ pub fn write_legacy_waypoints(
     if marker + LEGACY_WAYPOINT_SECTION_HEADER_BYTES <= raw.len() {
         raw[marker + LEGACY_WAYPOINT_SECTION_MARKER.len()
             ..marker + LEGACY_WAYPOINT_SECTION_HEADER_BYTES]
-            .copy_from_slice(&LEGACY_WAYPOINT_SECTION_HEADER_AFTER_MARKER);
+            .copy_from_slice(&header_after_marker);
     }
 
     let mut offset = marker + LEGACY_WAYPOINT_SECTION_HEADER_BYTES;
@@ -245,8 +275,9 @@ mod tests {
     use super::{
         LEGACY_WAYPOINT_SECTION_HEADER_AFTER_MARKER, LEGACY_WAYPOINT_SECTION_HEADER_BYTES,
         LEGACY_WAYPOINT_SECTION_MARKER, LEGACY_WAYPOINT_TRAILER, LEGACY_WAYPOINT_TRAILER_OFFSET,
-        PlayerWaypointState, WAYPOINT_ACTS, WAYPOINT_COUNT, WAYPOINT_NAMES, parse_legacy_waypoints,
-        write_legacy_waypoints,
+        PlayerWaypointState, V105_WAYPOINT_SECTION_HEADER_AFTER_MARKER, WAYPOINT_ACTS,
+        WAYPOINT_COUNT, WAYPOINT_NAMES, parse_legacy_waypoints, write_legacy_waypoints,
+        write_v105_waypoints,
     };
 
     #[test]
@@ -280,6 +311,25 @@ mod tests {
         waypoints[2][38] = true;
 
         assert!(write_legacy_waypoints(&mut raw, 0, &waypoints));
+        assert_eq!(raw[LEGACY_WAYPOINT_TRAILER_OFFSET], LEGACY_WAYPOINT_TRAILER);
+        assert_eq!(parse_legacy_waypoints(&raw, 0), Some(waypoints));
+    }
+
+    #[test]
+    fn v105_waypoints_preserve_v105_section_header() {
+        let mut raw = vec![0u8; LEGACY_WAYPOINT_TRAILER_OFFSET + 1];
+        raw[0..2].copy_from_slice(&LEGACY_WAYPOINT_SECTION_MARKER);
+        raw[2..LEGACY_WAYPOINT_SECTION_HEADER_BYTES]
+            .copy_from_slice(&V105_WAYPOINT_SECTION_HEADER_AFTER_MARKER);
+        let mut waypoints = [[false; WAYPOINT_COUNT]; 3];
+        waypoints[2][38] = true;
+
+        assert!(write_v105_waypoints(&mut raw, 0, &waypoints));
+
+        assert_eq!(
+            &raw[2..LEGACY_WAYPOINT_SECTION_HEADER_BYTES],
+            &V105_WAYPOINT_SECTION_HEADER_AFTER_MARKER
+        );
         assert_eq!(raw[LEGACY_WAYPOINT_TRAILER_OFFSET], LEGACY_WAYPOINT_TRAILER);
         assert_eq!(parse_legacy_waypoints(&raw, 0), Some(waypoints));
     }

@@ -391,7 +391,14 @@ impl Default for Connection {
 impl Connection {
     pub fn new() -> Self {
         Connection {
-            interface: datalink::interfaces().pop().unwrap(),
+            interface: pnet::datalink::NetworkInterface {
+                name: String::new(),
+                description: String::new(),
+                index: 0,
+                mac: None,
+                ips: vec![],
+                flags: 0,
+            },
             initialized: false,
             d2gs_reader: D2GSReader::new(),
             d2gs_tcp_stream: TcpStreamReassembler::new(),
