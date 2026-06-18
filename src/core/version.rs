@@ -18,6 +18,54 @@ pub enum SaveVersion {
     Unknown(u32),
 }
 
+/// In-game expansion mode for a character save.
+///
+/// Older Classic/LoD saves encode this through the legacy status expansion bit.
+/// Resurrected v105-family saves encode it through a separate mode marker byte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpansionMode {
+    Classic,
+    Expansion,
+    RotW,
+    Unknown(u8),
+}
+
+impl ExpansionMode {
+    pub const V105_CLASSIC_MARKER: u8 = 0x01;
+    pub const V105_EXPANSION_MARKER: u8 = 0x02;
+    pub const V105_ROTW_MARKER: u8 = 0x03;
+
+    pub const fn from_legacy_status(status: CharacterStatus) -> Self {
+        if status.expansion {
+            Self::Expansion
+        } else {
+            Self::Classic
+        }
+    }
+
+    pub const fn from_v105_marker(marker: u8) -> Self {
+        match marker {
+            Self::V105_CLASSIC_MARKER => Self::Classic,
+            Self::V105_EXPANSION_MARKER => Self::Expansion,
+            Self::V105_ROTW_MARKER => Self::RotW,
+            other => Self::Unknown(other),
+        }
+    }
+
+    pub const fn to_v105_marker(self) -> Option<u8> {
+        match self {
+            Self::Classic => Some(Self::V105_CLASSIC_MARKER),
+            Self::Expansion => Some(Self::V105_EXPANSION_MARKER),
+            Self::RotW => Some(Self::V105_ROTW_MARKER),
+            Self::Unknown(_) => None,
+        }
+    }
+
+    pub const fn legacy_status_expansion(self) -> bool {
+        matches!(self, Self::Expansion | Self::RotW)
+    }
+}
+
 impl SaveVersion {
     pub fn from_raw(raw: u32) -> Self {
         match raw {
@@ -105,7 +153,7 @@ pub fn detect_edition(version: SaveVersion, status: CharacterStatus) -> GameEdit
 
 #[cfg(test)]
 mod tests {
-    use super::{CharacterStatus, GameEdition, SaveVersion, detect_edition};
+    use super::{CharacterStatus, ExpansionMode, GameEdition, SaveVersion, detect_edition};
 
     #[test]
     fn character_status_round_trips_known_bits() {
@@ -141,5 +189,24 @@ mod tests {
             detect_edition(SaveVersion::from_raw(0x62), CharacterStatus::default()),
             GameEdition::Resurrected
         );
+    }
+
+    #[test]
+    fn expansion_mode_maps_v105_markers() {
+        assert_eq!(
+            ExpansionMode::from_v105_marker(0x01),
+            ExpansionMode::Classic
+        );
+        assert_eq!(
+            ExpansionMode::from_v105_marker(0x02),
+            ExpansionMode::Expansion
+        );
+        assert_eq!(ExpansionMode::from_v105_marker(0x03), ExpansionMode::RotW);
+        assert_eq!(
+            ExpansionMode::from_v105_marker(0x7f),
+            ExpansionMode::Unknown(0x7f)
+        );
+        assert_eq!(ExpansionMode::RotW.to_v105_marker(), Some(0x03));
+        assert_eq!(ExpansionMode::Unknown(0).to_v105_marker(), None);
     }
 }

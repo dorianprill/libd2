@@ -87,11 +87,14 @@ pub use crate::core::skills::{
     skill_points_needed_to_increase, skill_requirement,
 };
 pub use crate::core::unit_stat::UnitStat;
-pub use crate::core::version::{CharacterStatus, GameEdition, SaveVersion, detect_edition};
+pub use crate::core::version::{
+    CharacterStatus, ExpansionMode, GameEdition, SaveVersion, detect_edition,
+};
 pub use crate::core::waypoint::{
     LEGACY_WAYPOINT_BYTES_PER_DIFFICULTY, LEGACY_WAYPOINT_DATA_BYTES,
     LEGACY_WAYPOINT_DIFFICULTY_HEADER_BYTES, LEGACY_WAYPOINT_SECTION_HEADER_AFTER_MARKER,
     LEGACY_WAYPOINT_SECTION_HEADER_BYTES, LEGACY_WAYPOINT_SECTION_MARKER, LEGACY_WAYPOINT_TRAILER,
-    LEGACY_WAYPOINT_TRAILER_OFFSET, PlayerWaypointState, WAYPOINT_ACTS, WAYPOINT_COUNT,
-    WAYPOINT_NAMES, WaypointAct, parse_legacy_waypoints, write_legacy_waypoints,
+    LEGACY_WAYPOINT_TRAILER_OFFSET, PlayerWaypointState, V105_WAYPOINT_SECTION_HEADER_AFTER_MARKER,
+    WAYPOINT_ACTS, WAYPOINT_COUNT, WAYPOINT_NAMES, WaypointAct, parse_legacy_waypoints,
+    write_legacy_waypoints, write_v105_waypoints,
 };

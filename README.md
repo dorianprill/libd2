@@ -3,7 +3,7 @@
 A Diablo II library for passive game-state and reconstruction from game server packet de-serialization, savegame reading/writing, and static-data parsing without modifying the running game client.
 Written in Rust for performance, safety and re-usability.
 
-The current focus is legacy Classic/Lord of Destruction 1.14-era packet capture and state reconstruction, plus read-only foundations for character files, MPQ
+The current focus is legacy Classic/Lord of Destruction 1.14-era packet capture and state reconstruction, plus version-aware foundations for character files, MPQ
 archives, static data, and generated maps. The companion overlay/debug UI is
 [d2helper](https://github.com/dorianprill/d2helper), which consumes this crate
 for live LoD packet capture and automap-style visualization.
@@ -50,13 +50,13 @@ A lightweight savegame editor that only allows edits that can be achieved throug
 3. Character files and inventory profiles
    - [x] `.d2s` loading/parsing/saving is raw-preserving and validates magic, file size, and checksum; saving repairs size and checksum.
    - [x] Recognized save-version values are `0x47` pre-LoD, `0x57` LoD 1.07/1.08, `0x59` Classic 1.08, `0x5c` 1.09, `0x60` legacy 1.10+, and `>=0x61` D2R/modern.
-   - [x] Header layouts are dispatched as legacy, D2R legacy (`0x61..=0x68`), and D2R v105+ (`>=0x69`, decimal 105).
-   - [x] Edition detection covers Classic, Lord of Destruction, Resurrected, and Reign of the Warlock. Classic/LoD are distinguished by the expansion status flag; RotW is detected for D2R-encoded saves with Warlock class id `7`.
+   - [x] Header layouts are dispatched as legacy, D2R legacy (`0x61..=0x68`), and D2R v105+ (`>=0x69`, decimal 105). Concrete format/layout, game edition, and in-game expansion mode are tracked separately so v105 saves use the mode marker instead of the legacy expansion status bit.
+   - [x] Edition detection covers Classic, Lord of Destruction, Resurrected, and Reign of the Warlock. Classic/LoD are distinguished by the legacy expansion status flag; v105 Classic/Expansion/RotW mode is read from the v105 mode marker, with Warlock class id `7` also treated as RotW.
    - [x] Inventory profiles are modeled for Classic (`10x4` inventory, `6x4` stash), LoD (`10x4`, `6x8` stash), D2R (`10x4`, `10x10` personal stash, 3 shared pages), and RotW (`10x4`, `10x8` personal stash, 3 shared pages).
    - [x] Parsed save sections include header fields, D2R v105 progression and mercenary header fields, bit-packed `gf` character stats, 30-byte `if` skills, and item-related marker metadata for `JM`, `jf`, `kf`, and `lf`.
    - [x] Legacy Classic/LoD export can write a standalone LoD 1.10+ style `.d2s` from local-player `GameState`: header/status/class/level/map seed, bit-packed `gf` stats, reconstructed `0x94` skills projected into the 30-byte `if` class table, empty player item and corpse lists, and empty expansion merc/golem markers. Callers can override the skill table when a capture lacks `0x94`.
-   - [x] Legacy template overlay can rewrite header, stats, and skills in an existing Classic/LoD save while preserving later save-only sections and repairing size/checksum.
-   - [ ] Item records, personal/shared stash pages, semantic quest/waypoint/NPC introduction parsers, corpse payloads, detailed Iron Golem payloads, follower payload contents, and semantic save editing are not implemented.
+   - [x] Legacy and D2R/RotW template overlays can rewrite supported header, stat, skill, quest, waypoint, and gold fields while preserving or emitting format-correct empty save sections and repairing size/checksum.
+   - [ ] Item records, item properties, equipped gear, inventory/stash pages, follower/mercenary/summon payloads, corpse payloads, detailed Iron Golem payloads, shared stash `.d2i` files, and broad semantic save editing beyond supported fields are not implemented.
 4. MPQ and static game data
    - [x] MPQ primitives include header parsing, hash-table/block-table entry parsing, format/compression enums, path hashing, decryption-key derivation, encryption-table generation, and in-place block decryption.
    - [x] Read-only MPQ v1 archive lookup/extraction supports known logical paths, encrypted hash/block tables, sector tables, encrypted sectors, single-unit files, uncompressed sectors, PKWARE implode, zlib, and bzip2 compression masks.

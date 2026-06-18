@@ -10,7 +10,9 @@ use crate::core::game_state::GameState;
 use crate::core::inventory::InventoryProfile;
 use crate::core::object::item::{Item, ItemContainer, ItemDestination, ItemOwner, ItemQuality};
 use crate::core::unit_stat::UnitStat;
-use crate::core::version::{CharacterStatus, GameEdition, SaveVersion, detect_edition};
+use crate::core::version::{
+    CharacterStatus, ExpansionMode, GameEdition, SaveVersion, detect_edition,
+};
 use crate::core::{quest, waypoint};
 
 const D2S_MAGIC: u32 = 0xaa55_aa55;
@@ -27,13 +29,28 @@ const LEGACY_LEVEL_OFFSET: usize = 0x2b;
 const D2R_V105_STATUS_OFFSET: usize = 0x14;
 const D2R_V105_PROGRESSION_OFFSET: usize = 0x15;
 const D2R_V105_CLASS_OFFSET: usize = 0x18;
+const D2R_V105_RESERVED_VERSION_MARKERS_OFFSET: usize = 0x19;
 const D2R_V105_LEVEL_OFFSET: usize = 0x1b;
+const D2R_V105_RESERVED_CHECKSUM_MASK_OFFSET: usize = 0x24;
+const D2R_V105_ASSIGNED_SKILLS_OFFSET: usize = 0x28;
+const D2R_V105_LEFT_SKILL_OFFSET: usize = 0x68;
+const D2R_V105_RIGHT_SKILL_OFFSET: usize = 0x6c;
+const D2R_V105_LEFT_SWAP_SKILL_OFFSET: usize = 0x70;
+const D2R_V105_RIGHT_SWAP_SKILL_OFFSET: usize = 0x74;
+const D2R_V105_APPEARANCE_OFFSET: usize = 0x78;
+const D2R_V105_DIFFICULTY_OFFSET: usize = 0x98;
+const D2R_V105_MAP_ID_OFFSET: usize = 0x9b;
 const D2R_V105_MERC_NAME_SEED_OFFSET: usize = 0x0a3;
 const D2R_V105_MERC_STATUS_OFFSET: usize = 0x0a7;
 const D2R_V105_MERC_ID_OFFSET: usize = 0x0a9;
 const D2R_V105_MERC_XP_OFFSET: usize = 0x0ab;
+const D2R_V105_MODE_MARKER_OFFSET: usize = 0x0f8;
 const D2R_V105_HEADER_LEN: usize = 0x150;
 const LEGACY_FULL_EXPORT_PRE_STATS_LEN: usize = 0x2fd;
+const V105_FULL_EXPORT_PRE_STATS_LEN: usize = 0x341;
+const V105_QUEST_HEADER_OFFSET: usize = 0x193;
+const V105_WAYPOINT_HEADER_OFFSET: usize = 0x2bd;
+const V105_NPC_HEADER_OFFSET: usize = 0x30d;
 const LEGACY_ASSIGNED_SKILLS_OFFSET: usize = 0x38;
 const LEGACY_LEFT_SKILL_OFFSET: usize = 0x78;
 const LEGACY_RIGHT_SKILL_OFFSET: usize = 0x7c;
@@ -104,6 +121,7 @@ pub struct CharacterHeader {
     pub level: u8,
     pub mercenary: Option<MercenaryHeader>,
     pub edition: GameEdition,
+    pub expansion_mode: ExpansionMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -410,7 +428,16 @@ impl CharacterFile {
         self.raw[name_offset..name_offset + 16].fill(0);
         self.raw[name_offset..name_offset + len].copy_from_slice(&bytes[..len]);
 
-        self.raw[layout.status_offset()] = status.to_byte();
+        let encoded_status = if layout == CharacterHeaderLayout::ResurrectedV105 {
+            CharacterStatus {
+                expansion: false,
+                ..status
+            }
+        } else {
+            status
+        };
+
+        self.raw[layout.status_offset()] = encoded_status.to_byte();
         self.raw[layout.class_offset()] = class as u8;
         self.raw[layout.level_offset()] = level;
 
@@ -419,12 +446,53 @@ impl CharacterFile {
         }
 
         self.header.name = name.to_string();
-        self.header.status = status;
+        self.header.status = encoded_status;
         self.header.class = Some(class);
         self.header.class_id = class as u8;
         self.header.level = level;
         self.header.progression = progression;
+        self.header.edition = detect_character_edition(
+            self.header.save_version,
+            encoded_status,
+            self.header.expansion_mode,
+            self.header.class_id,
+        );
 
+        fix_header(&mut self.raw);
+        Ok(())
+    }
+
+    pub fn set_expansion_mode(
+        &mut self,
+        expansion_mode: ExpansionMode,
+    ) -> Result<(), CharacterExportError> {
+        match self.header.layout {
+            CharacterHeaderLayout::ResurrectedV105 => {
+                let Some(marker) = expansion_mode.to_v105_marker() else {
+                    return Err(CharacterExportError::UnsupportedExpansionMode { expansion_mode });
+                };
+                self.raw[D2R_V105_MODE_MARKER_OFFSET] = marker;
+                self.raw[D2R_V105_STATUS_OFFSET] = CharacterStatus {
+                    expansion: false,
+                    ..self.header.status
+                }
+                .to_byte();
+            }
+            CharacterHeaderLayout::Legacy | CharacterHeaderLayout::ResurrectedLegacy => {
+                self.header.status.expansion = expansion_mode.legacy_status_expansion();
+                self.raw[self.header.layout.status_offset()] = self.header.status.to_byte();
+            }
+        }
+
+        self.header.expansion_mode = expansion_mode;
+        self.header.status =
+            CharacterStatus::from_byte(self.raw[self.header.layout.status_offset()]);
+        self.header.edition = detect_character_edition(
+            self.header.save_version,
+            self.header.status,
+            self.header.expansion_mode,
+            self.header.class_id,
+        );
         fix_header(&mut self.raw);
         Ok(())
     }
@@ -479,7 +547,13 @@ impl CharacterFile {
     ) -> Result<(), CharacterExportError> {
         let start = self.header.layout.section_search_start();
         quest::write_legacy_quest_words(&mut self.raw, start, quests);
-        quest::apply_progression_from_quests(&mut self.raw, start, quests);
+        let progression = quest::progression_from_quests(quests);
+        if self.header.layout == CharacterHeaderLayout::ResurrectedV105 {
+            self.raw[D2R_V105_PROGRESSION_OFFSET] = progression;
+            self.header.progression = Some(CharacterProgression::from_v105_byte(progression));
+        } else {
+            quest::apply_progression_from_quests(&mut self.raw, start, quests);
+        }
         fix_header(&mut self.raw);
         Ok(())
     }
@@ -489,7 +563,11 @@ impl CharacterFile {
         waypoints: &[[bool; waypoint::WAYPOINT_COUNT]; 3],
     ) -> Result<(), CharacterExportError> {
         let start = self.header.layout.section_search_start();
-        waypoint::write_legacy_waypoints(&mut self.raw, start, waypoints);
+        if self.header.layout == CharacterHeaderLayout::ResurrectedV105 {
+            waypoint::write_v105_waypoints(&mut self.raw, start, waypoints);
+        } else {
+            waypoint::write_legacy_waypoints(&mut self.raw, start, waypoints);
+        }
         fix_header(&mut self.raw);
         Ok(())
     }
@@ -515,6 +593,83 @@ impl CharacterFile {
         raw.extend_from_slice(&stats_section);
         raw.extend_from_slice(&skills_section);
         append_legacy_item_sections(&mut raw, state, snapshot.status.expansion);
+        fix_header(&mut raw);
+
+        Self::parse(raw).map_err(CharacterExportError::CharacterFile)
+    }
+
+    pub fn default_v105(class: CharacterClass, name: &str) -> Result<Self, CharacterExportError> {
+        let expansion_mode = if class == CharacterClass::Warlock {
+            ExpansionMode::RotW
+        } else {
+            ExpansionMode::Expansion
+        };
+        Self::default_v105_with_expansion_mode(class, name, expansion_mode)
+    }
+
+    pub fn default_rotw(class: CharacterClass, name: &str) -> Result<Self, CharacterExportError> {
+        Self::default_v105_with_expansion_mode(class, name, ExpansionMode::RotW)
+    }
+
+    pub fn default_v105_with_expansion_mode(
+        class: CharacterClass,
+        name: &str,
+        expansion_mode: ExpansionMode,
+    ) -> Result<Self, CharacterExportError> {
+        if class == CharacterClass::Warlock && expansion_mode != ExpansionMode::RotW {
+            return Err(CharacterExportError::UnsupportedExpansionMode { expansion_mode });
+        }
+
+        let base = crate::core::character_progression::BaseStats::for_class(class);
+        let status = CharacterStatus {
+            hardcore: false,
+            died: false,
+            expansion: false,
+            ladder: false,
+        };
+        let edition = if expansion_mode == ExpansionMode::RotW {
+            GameEdition::ReignOfTheWarlock
+        } else {
+            GameEdition::Resurrected
+        };
+        let snapshot = LegacyExportSnapshot {
+            name: name.to_string(),
+            status,
+            edition,
+            expansion_mode,
+            class,
+            level: 1,
+            map_id: 0,
+            stats: vec![
+                (CharacterStat::Strength, base.str),
+                (CharacterStat::Energy, base.eng),
+                (CharacterStat::Dexterity, base.dex),
+                (CharacterStat::Vitality, base.vit),
+                (CharacterStat::StatPoints, 0),
+                (CharacterStat::SkillPoints, 0),
+                (CharacterStat::HitPoints, base.hp << 8),
+                (CharacterStat::MaxHitPoints, base.hp << 8),
+                (CharacterStat::Mana, base.mana << 8),
+                (CharacterStat::MaxMana, base.mana << 8),
+                (CharacterStat::Stamina, base.stamina << 8),
+                (CharacterStat::MaxStamina, base.stamina << 8),
+                (CharacterStat::Level, 1),
+                (CharacterStat::Experience, 0),
+                (CharacterStat::Gold, 0),
+                (CharacterStat::StashedGold, 0),
+            ],
+            skills: [0; 30],
+            quests: [[0u16; quest::SAVE_QUEST_WORDS_PER_DIFFICULTY]; 3],
+            waypoints: [[false; waypoint::WAYPOINT_COUNT]; 3],
+        };
+
+        let stats_section = encode_character_stats_section(&snapshot.stats)?;
+        let skills_section = encode_character_skills_section(snapshot.skills);
+
+        let mut raw = build_v105_fixed_pre_stats_block(&snapshot);
+        raw.extend_from_slice(&stats_section);
+        raw.extend_from_slice(&skills_section);
+        append_v105_item_sections(&mut raw, &GameState::default(), expansion_mode);
         fix_header(&mut raw);
 
         Self::parse(raw).map_err(CharacterExportError::CharacterFile)
@@ -549,11 +704,6 @@ impl CharacterFile {
 
 #[derive(Debug)]
 pub enum CharacterFileError {
-    Io(io::Error),
-    TooSmall {
-        len: usize,
-        required: usize,
-    },
     BadMagic {
         found: u32,
     },
@@ -567,6 +717,11 @@ pub enum CharacterFileError {
     },
     InvalidFileSize {
         len: usize,
+    },
+    Io(io::Error),
+    TooSmall {
+        len: usize,
+        required: usize,
     },
 }
 
@@ -628,6 +783,9 @@ pub enum CharacterExportError {
     UnsupportedTemplateLayout {
         layout: CharacterHeaderLayout,
     },
+    UnsupportedExpansionMode {
+        expansion_mode: ExpansionMode,
+    },
     MissingSection {
         marker: SaveSectionMarker,
     },
@@ -655,6 +813,13 @@ impl fmt::Display for CharacterExportError {
             ),
             Self::UnsupportedTemplateLayout { layout } => {
                 write!(formatter, "unsupported D2S template layout {:?}", layout)
+            }
+            Self::UnsupportedExpansionMode { expansion_mode } => {
+                write!(
+                    formatter,
+                    "unsupported D2S expansion mode {:?}",
+                    expansion_mode
+                )
             }
             Self::MissingSection { marker } => {
                 write!(
@@ -732,10 +897,8 @@ fn parse_header(raw: &[u8]) -> Result<CharacterHeader, CharacterFileError> {
         .progression_offset()
         .map(|offset| CharacterProgression::from_v105_byte(raw[offset]));
     let class_id = raw[layout.class_offset()];
-    let mut edition = detect_edition(save_version, status);
-    if save_version.uses_resurrected_item_encoding() && class_id == CharacterClass::Warlock as u8 {
-        edition = GameEdition::ReignOfTheWarlock;
-    }
+    let expansion_mode = expansion_mode_from_raw(raw, layout, status);
+    let edition = detect_character_edition(save_version, status, expansion_mode, class_id);
     let mercenary = if layout == CharacterHeaderLayout::ResurrectedV105
         && raw.len() >= D2R_V105_MERC_XP_OFFSET + 4
     {
@@ -766,7 +929,46 @@ fn parse_header(raw: &[u8]) -> Result<CharacterHeader, CharacterFileError> {
         level: raw[layout.level_offset()],
         mercenary,
         edition,
+        expansion_mode,
     })
+}
+
+fn expansion_mode_from_raw(
+    raw: &[u8],
+    layout: CharacterHeaderLayout,
+    status: CharacterStatus,
+) -> ExpansionMode {
+    if layout == CharacterHeaderLayout::ResurrectedV105 {
+        raw.get(D2R_V105_MODE_MARKER_OFFSET)
+            .copied()
+            .map(ExpansionMode::from_v105_marker)
+            .unwrap_or(ExpansionMode::Unknown(0))
+    } else {
+        ExpansionMode::from_legacy_status(status)
+    }
+}
+
+fn detect_character_edition(
+    save_version: SaveVersion,
+    status: CharacterStatus,
+    expansion_mode: ExpansionMode,
+    class_id: u8,
+) -> GameEdition {
+    if save_version.uses_v105_header() {
+        if expansion_mode == ExpansionMode::RotW || class_id == CharacterClass::Warlock as u8 {
+            GameEdition::ReignOfTheWarlock
+        } else {
+            GameEdition::Resurrected
+        }
+    } else if save_version.uses_resurrected_item_encoding() {
+        if class_id == CharacterClass::Warlock as u8 {
+            GameEdition::ReignOfTheWarlock
+        } else {
+            GameEdition::Resurrected
+        }
+    } else {
+        detect_edition(save_version, status)
+    }
 }
 
 fn parse_character_stats(raw: &[u8], layout: CharacterHeaderLayout) -> CharacterStats {
@@ -889,6 +1091,8 @@ fn parse_item_lists(raw: &[u8], layout: CharacterHeaderLayout) -> CharacterItemL
 struct LegacyExportSnapshot {
     name: String,
     status: CharacterStatus,
+    edition: GameEdition,
+    expansion_mode: ExpansionMode,
     class: CharacterClass,
     level: u8,
     map_id: u32,
@@ -946,9 +1150,24 @@ impl LegacyExportSnapshot {
             ladder: state.is_ladder(),
         };
 
+        let edition = if class == CharacterClass::Warlock {
+            GameEdition::ReignOfTheWarlock
+        } else if status.expansion {
+            GameEdition::LordOfDestruction
+        } else {
+            GameEdition::Classic
+        };
+        let expansion_mode = match edition {
+            GameEdition::Classic => ExpansionMode::Classic,
+            GameEdition::ReignOfTheWarlock => ExpansionMode::RotW,
+            _ => ExpansionMode::Expansion,
+        };
+
         Ok(Self {
             name,
             status,
+            edition,
+            expansion_mode,
             class,
             level,
             map_id: state.map().map_id.unwrap_or_default(),
@@ -1135,6 +1354,78 @@ fn build_legacy_fixed_pre_stats_block(snapshot: &LegacyExportSnapshot) -> Vec<u8
     raw
 }
 
+fn build_v105_fixed_pre_stats_block(snapshot: &LegacyExportSnapshot) -> Vec<u8> {
+    let mut raw = vec![0; V105_FULL_EXPORT_PRE_STATS_LEN];
+    raw[0..4].copy_from_slice(&D2S_MAGIC.to_le_bytes());
+    write_u32_le(&mut raw, VERSION_OFFSET, 105);
+
+    write_fixed_character_name(&mut raw, D2R_V105_NAME_OFFSET, &snapshot.name);
+    raw[D2R_V105_STATUS_OFFSET] = snapshot.status.to_byte();
+    raw[D2R_V105_PROGRESSION_OFFSET] = quest::progression_from_quests(&snapshot.quests);
+    raw[D2R_V105_CLASS_OFFSET] = snapshot.class as u8;
+    raw[D2R_V105_RESERVED_VERSION_MARKERS_OFFSET..D2R_V105_RESERVED_VERSION_MARKERS_OFFSET + 2]
+        .copy_from_slice(&[0x10, 0x1e]);
+    raw[D2R_V105_LEVEL_OFFSET] = snapshot.level;
+    raw[D2R_V105_RESERVED_CHECKSUM_MASK_OFFSET..D2R_V105_RESERVED_CHECKSUM_MASK_OFFSET + 4]
+        .fill(0xff);
+    for offset in (D2R_V105_ASSIGNED_SKILLS_OFFSET..D2R_V105_LEFT_SKILL_OFFSET).step_by(4) {
+        raw[offset..offset + 4].copy_from_slice(&0x0000_ffffu32.to_le_bytes());
+    }
+    raw[D2R_V105_LEFT_SKILL_OFFSET..D2R_V105_LEFT_SKILL_OFFSET + 4]
+        .copy_from_slice(&0xffff_ffffu32.to_le_bytes());
+    raw[D2R_V105_RIGHT_SKILL_OFFSET..D2R_V105_RIGHT_SKILL_OFFSET + 4]
+        .copy_from_slice(&0xffff_ffffu32.to_le_bytes());
+    raw[D2R_V105_LEFT_SWAP_SKILL_OFFSET..D2R_V105_LEFT_SWAP_SKILL_OFFSET + 4]
+        .copy_from_slice(&0xffff_ffffu32.to_le_bytes());
+    raw[D2R_V105_RIGHT_SWAP_SKILL_OFFSET..D2R_V105_RIGHT_SWAP_SKILL_OFFSET + 4]
+        .copy_from_slice(&0xffff_ffffu32.to_le_bytes());
+    raw[D2R_V105_APPEARANCE_OFFSET..D2R_V105_APPEARANCE_OFFSET + 32].fill(0xff);
+    raw[D2R_V105_DIFFICULTY_OFFSET] = 0x80;
+    write_u32_le(&mut raw, D2R_V105_MAP_ID_OFFSET, snapshot.map_id);
+    raw[D2R_V105_MODE_MARKER_OFFSET] = snapshot
+        .expansion_mode
+        .to_v105_marker()
+        .unwrap_or(ExpansionMode::V105_EXPANSION_MARKER);
+
+    // Quests
+    let q_start = V105_QUEST_HEADER_OFFSET;
+    raw[q_start..q_start + 4].copy_from_slice(&quest::SAVE_QUEST_SECTION_MARKER);
+    raw[q_start + 4..q_start + 8].copy_from_slice(&0x06u32.to_le_bytes());
+    raw[q_start + 8..q_start + 12].copy_from_slice(&0x2au32.to_le_bytes());
+
+    quest::write_legacy_quest_words(&mut raw, D2R_V105_HEADER_LEN, &snapshot.quests);
+    raw[D2R_V105_PROGRESSION_OFFSET] = quest::progression_from_quests(&snapshot.quests);
+
+    // Waypoints
+    let wp_start = V105_WAYPOINT_HEADER_OFFSET;
+    raw[wp_start..wp_start + 2].copy_from_slice(&waypoint::LEGACY_WAYPOINT_SECTION_MARKER);
+    raw[wp_start + 2..wp_start + 6].copy_from_slice(&0x01u32.to_le_bytes());
+    raw[wp_start + 6..wp_start + 10].copy_from_slice(&0x50u32.to_le_bytes());
+
+    for difficulty in 0..3 {
+        let offset = wp_start + 10 + difficulty * LEGACY_WAYPOINT_DIFFICULTY_LEN;
+        raw[offset] = 0x02;
+        raw[offset + 1] = 0x01;
+    }
+    raw[wp_start + 0x52] = 0x01; // Trailer
+
+    waypoint::write_v105_waypoints(&mut raw, D2R_V105_HEADER_LEN, &snapshot.waypoints);
+
+    // NPC
+    let npc_start = npc_offset(snapshot.edition);
+    raw[npc_start..npc_start + 4].copy_from_slice(&[0x01, 0x77, 0x34, 0x00]);
+
+    debug_assert_eq!(raw.len(), V105_FULL_EXPORT_PRE_STATS_LEN);
+    raw
+}
+
+fn npc_offset(edition: GameEdition) -> usize {
+    match edition {
+        GameEdition::ReignOfTheWarlock => V105_NPC_HEADER_OFFSET,
+        _ => V105_NPC_HEADER_OFFSET, // For now same for all V105
+    }
+}
+
 fn write_empty_legacy_quests(raw: &mut [u8]) {
     write_u32_le(raw, LEGACY_QUEST_UNKNOWN_OFFSET, 1);
     raw[LEGACY_QUEST_HEADER_OFFSET..LEGACY_QUEST_HEADER_OFFSET + 4]
@@ -1155,9 +1446,6 @@ fn write_empty_legacy_waypoints(raw: &mut [u8]) {
         raw[offset + 1] = 0x01;
     }
 
-    // Public parsers disagree by one byte at the waypoint/NPC boundary. Actual
-    // saves keep this `0x01` trailer immediately before the `w4` NPC marker;
-    // D2SLib treats it as the low byte of a `0x7701` NPC header.
     raw[LEGACY_WAYPOINT_TRAILER_OFFSET] = 0x01;
 }
 
@@ -1173,6 +1461,23 @@ fn append_legacy_item_sections(raw: &mut Vec<u8>, state: &GameState, is_expansio
         raw.extend_from_slice(SaveSectionMarker::Corpse.raw_bytes());
         raw.extend_from_slice(SaveSectionMarker::IronGolem.raw_bytes());
         raw.push(0);
+    }
+}
+
+fn append_v105_item_sections(raw: &mut Vec<u8>, state: &GameState, expansion_mode: ExpansionMode) {
+    append_player_inventory_item_list(raw, state);
+    append_empty_item_list(raw);
+
+    if expansion_mode != ExpansionMode::Classic {
+        raw.extend_from_slice(SaveSectionMarker::Corpse.raw_bytes());
+        raw.extend_from_slice(SaveSectionMarker::IronGolem.raw_bytes());
+        raw.push(0);
+    }
+
+    if expansion_mode == ExpansionMode::RotW {
+        raw.extend_from_slice(&1u16.to_le_bytes());
+        raw.extend_from_slice(SaveSectionMarker::Followers.raw_bytes());
+        raw.extend_from_slice(&0u16.to_le_bytes());
     }
 }
 
@@ -1378,7 +1683,6 @@ fn encode_legacy_item(item: &Item, socketed_children: u8) -> Option<Vec<u8>> {
 
     if let Some(runeword) = packet.runeword {
         writer.write_bits(runeword.id as u32, 12);
-        let _ = runeword.parameter;
         writer.write_bits(5, 4);
     }
 
@@ -1616,7 +1920,8 @@ fn write_legacy_header_snapshot(raw: &mut [u8], snapshot: &LegacyExportSnapshot)
 fn write_fixed_character_name(raw: &mut [u8], offset: usize, name: &str) {
     let bytes = name.as_bytes();
     raw[offset..offset + CHARACTER_NAME_LEN].fill(0);
-    raw[offset..offset + bytes.len()].copy_from_slice(bytes);
+    let len = bytes.len().min(CHARACTER_NAME_LEN - 1);
+    raw[offset..offset + len].copy_from_slice(&bytes[..len]);
 }
 
 fn find_item_list_headers(raw: &[u8], start: usize) -> Vec<ItemListHeader> {
@@ -1649,7 +1954,8 @@ fn find_marker(raw: &[u8], marker: &[u8], start: usize) -> Option<usize> {
 }
 
 fn fix_header(raw: &mut [u8]) {
-    write_u32_le(raw, FILE_SIZE_OFFSET, raw.len() as u32);
+    let len = raw.len() as u32;
+    write_u32_le(raw, FILE_SIZE_OFFSET, len);
     write_u32_le(raw, CHECKSUM_OFFSET, 0);
     let checksum = calculate_checksum(raw);
     write_u32_le(raw, CHECKSUM_OFFSET, checksum);
@@ -1756,6 +2062,10 @@ fn header_layout(version: SaveVersion) -> CharacterHeaderLayout {
 }
 
 impl CharacterHeaderLayout {
+    pub const fn uses_v105_mode_marker(self) -> bool {
+        matches!(self, Self::ResurrectedV105)
+    }
+
     fn name_offset(self) -> usize {
         match self {
             Self::Legacy => LEGACY_NAME_OFFSET,
@@ -1814,7 +2124,7 @@ mod tests {
     use crate::core::object::item::{Item, ItemContainer, ItemDestination, ItemFlags};
     use crate::core::unit_stat::UnitStat;
     use crate::core::update::Update;
-    use crate::core::version::{CharacterStatus, GameEdition, SaveVersion};
+    use crate::core::version::{CharacterStatus, ExpansionMode, GameEdition, SaveVersion};
     use crate::core::{game_state::GameState, quest, waypoint};
     use crate::{CharacterClass, ServerMessage, SkillDescription};
 
@@ -1823,12 +2133,14 @@ mod tests {
         CharacterFileError, CharacterHeaderLayout, CharacterProgression, CharacterStat,
         D2R_LEGACY_NAME_OFFSET, D2R_V105_CLASS_OFFSET, D2R_V105_HEADER_LEN, D2R_V105_LEVEL_OFFSET,
         D2R_V105_MERC_ID_OFFSET, D2R_V105_MERC_NAME_SEED_OFFSET, D2R_V105_MERC_STATUS_OFFSET,
-        D2R_V105_MERC_XP_OFFSET, D2R_V105_NAME_OFFSET, D2R_V105_PROGRESSION_OFFSET,
-        D2R_V105_STATUS_OFFSET, D2S_MAGIC, FILE_SIZE_OFFSET, LEGACY_CLASS_OFFSET,
-        LEGACY_FULL_EXPORT_PRE_STATS_LEN, LEGACY_LEVEL_OFFSET, LEGACY_NAME_OFFSET,
-        LEGACY_NPC_HEADER_OFFSET, LEGACY_QUEST_HEADER_OFFSET, LEGACY_STATUS_OFFSET,
-        LEGACY_WAYPOINT_HEADER_OFFSET, LEGACY_WAYPOINT_TRAILER_OFFSET, SaveSectionMarker,
-        VERSION_OFFSET, calculate_checksum, read_bits,
+        D2R_V105_MERC_XP_OFFSET, D2R_V105_MODE_MARKER_OFFSET, D2R_V105_NAME_OFFSET,
+        D2R_V105_PROGRESSION_OFFSET, D2R_V105_RESERVED_CHECKSUM_MASK_OFFSET,
+        D2R_V105_RESERVED_VERSION_MARKERS_OFFSET, D2R_V105_STATUS_OFFSET, D2S_MAGIC,
+        FILE_SIZE_OFFSET, LEGACY_CLASS_OFFSET, LEGACY_FULL_EXPORT_PRE_STATS_LEN,
+        LEGACY_LEVEL_OFFSET, LEGACY_NAME_OFFSET, LEGACY_NPC_HEADER_OFFSET,
+        LEGACY_QUEST_HEADER_OFFSET, LEGACY_STATUS_OFFSET, LEGACY_WAYPOINT_HEADER_OFFSET,
+        LEGACY_WAYPOINT_TRAILER_OFFSET, SaveSectionMarker, V105_NPC_HEADER_OFFSET,
+        V105_WAYPOINT_HEADER_OFFSET, VERSION_OFFSET, calculate_checksum, read_bits,
     };
 
     #[test]
@@ -1935,13 +2247,96 @@ mod tests {
     #[test]
     fn warlock_v105_save_selects_reign_inventory_profile() {
         let mut raw = build_v105_save("Malphas", CharacterClass::Warlock, 80);
+        raw[D2R_V105_MODE_MARKER_OFFSET] = ExpansionMode::V105_ROTW_MARKER;
         fix_test_header(&mut raw);
 
         let file = CharacterFile::parse(raw).expect("valid Warlock file should parse");
 
         assert_eq!(file.header().edition, GameEdition::ReignOfTheWarlock);
+        assert_eq!(file.header().expansion_mode, ExpansionMode::RotW);
         assert_eq!(file.header().class, Some(CharacterClass::Warlock));
         assert_eq!(file.inventory_profile().stash, Some(GridSize::new(10, 8)));
+    }
+
+    #[test]
+    fn default_rotw_v105_uses_native_rotw_signatures() {
+        let file =
+            CharacterFile::default_rotw(CharacterClass::Amazon, "RotWAma").expect("template");
+        let raw = file.raw_bytes();
+
+        assert_eq!(file.header().edition, GameEdition::ReignOfTheWarlock);
+        assert_eq!(file.header().expansion_mode, ExpansionMode::RotW);
+        assert_eq!(raw[D2R_V105_STATUS_OFFSET], 0x00);
+        assert_eq!(
+            raw[D2R_V105_MODE_MARKER_OFFSET],
+            ExpansionMode::V105_ROTW_MARKER
+        );
+        assert_eq!(
+            &raw[D2R_V105_RESERVED_VERSION_MARKERS_OFFSET
+                ..D2R_V105_RESERVED_VERSION_MARKERS_OFFSET + 2],
+            &[0x10, 0x1e]
+        );
+        assert_eq!(
+            &raw[D2R_V105_RESERVED_CHECKSUM_MASK_OFFSET
+                ..D2R_V105_RESERVED_CHECKSUM_MASK_OFFSET + 4],
+            &[0xff, 0xff, 0xff, 0xff]
+        );
+        assert_eq!(
+            &raw[V105_WAYPOINT_HEADER_OFFSET..V105_WAYPOINT_HEADER_OFFSET + 8],
+            &[0x57, 0x53, 0x01, 0x00, 0x00, 0x00, 0x50, 0x00]
+        );
+        assert_eq!(
+            &raw[V105_NPC_HEADER_OFFSET..V105_NPC_HEADER_OFFSET + 4],
+            &[0x01, 0x77, 0x34, 0x00]
+        );
+        assert!(raw.ends_with(&[
+            0x4a, 0x4d, 0x00, 0x00, 0x6a, 0x66, 0x6b, 0x66, 0x00, 0x01, 0x00, 0x6c, 0x66, 0x00,
+            0x00,
+        ]));
+    }
+
+    #[test]
+    fn v105_replace_quests_writes_v105_progression_without_legacy_overwrite() {
+        let mut file =
+            CharacterFile::default_rotw(CharacterClass::Amazon, "Quested").expect("template");
+        let mut quests = quest::initial_template_quests();
+        quest::set_quest_completed(&mut quests[2][quest::EVE_OF_DESTRUCTION], true);
+
+        file.replace_quests(&quests).expect("quests should update");
+
+        assert_eq!(
+            file.raw_bytes()[D2R_V105_PROGRESSION_OFFSET],
+            quest::PROGRESSION_HELL_COMPLETED
+        );
+        assert_eq!(
+            &file.raw_bytes()[D2R_V105_RESERVED_CHECKSUM_MASK_OFFSET
+                ..D2R_V105_RESERVED_CHECKSUM_MASK_OFFSET + 4],
+            &[0xff, 0xff, 0xff, 0xff]
+        );
+    }
+
+    #[test]
+    fn v105_replace_waypoints_preserves_v105_waypoint_header() {
+        let mut file =
+            CharacterFile::default_rotw(CharacterClass::Amazon, "Waypoints").expect("template");
+        let mut waypoints = [[false; waypoint::WAYPOINT_COUNT]; 3];
+        waypoints[2][38] = true;
+
+        file.replace_waypoints(&waypoints)
+            .expect("waypoints should update");
+
+        assert_eq!(
+            &file.raw_bytes()[V105_WAYPOINT_HEADER_OFFSET..V105_WAYPOINT_HEADER_OFFSET + 8],
+            &[0x57, 0x53, 0x01, 0x00, 0x00, 0x00, 0x50, 0x00]
+        );
+    }
+
+    #[test]
+    fn sorceress_base_strength_matches_fresh_rotw_save() {
+        let file =
+            CharacterFile::default_rotw(CharacterClass::Sorceress, "RotWSorc").expect("template");
+
+        assert_eq!(file.stat(CharacterStat::Strength), Some(10));
     }
 
     #[test]
